@@ -1,0 +1,724 @@
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { LogEntry, LogStats, FilterOptions, DisplayDensity, ColumnVisibility, ThemeMode, BorderIntensity, ColumnWidths } from './types';
+import { parseLogContent } from './utils/logParser';
+import { generateSampleLogsText } from './utils/sampleData';
+import { parseLogTimestampToMs, parseInputTimeToMs } from './utils/dateUtils';
+import { HeaderDashboard } from './components/HeaderDashboard';
+import { Toolbar } from './components/Toolbar';
+import { VirtualLogTable } from './components/VirtualLogTable';
+import { DropZone } from './components/DropZone';
+import { FloatingErrorNav } from './components/FloatingErrorNav';
+import { Upload } from 'lucide-react';
+
+const defaultColumnWidths: ColumnWidths = {
+  index: 48,
+  timestamp: 176,
+  level: 72,
+  requestId: 112,
+  operationDesc: 380,
+  functionName: 160,
+  threadId: 80,
+  memoryAddress: 128,
+  module: 112,
+  fileName: 144,
+  lineNumber: 64,
+};
+
+export default function App() {
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [stats, setStats] = useState<LogStats | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  // 主题模式 (dark / light) 默认使用浅色 (light)
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_THEME');
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch {}
+    return 'light';
+  });
+  const handleToggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_THEME', theme);
+    } catch {}
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  // 表格边框显示度 (light / medium / strong)
+  const [borderIntensity, setBorderIntensity] = useState<BorderIntensity>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_BORDER_INTENSITY');
+      if (saved === 'light' || saved === 'medium' || saved === 'strong') return saved;
+    } catch {}
+    return 'medium';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_BORDER_INTENSITY', borderIntensity);
+    } catch {}
+  }, [borderIntensity]);
+
+  const [jumpToLine, setJumpToLine] = useState<{ line: number; timestamp: number } | null>(null);
+
+  const handleJumpToLine = useCallback((lineNum: number) => {
+    setJumpToLine({ line: lineNum, timestamp: Date.now() });
+  }, []);
+
+  const [targetNavLog, setTargetNavLog] = useState<{ id: number; timestamp: number } | null>(null);
+
+  const handleNavigateToLog = useCallback((logId: number) => {
+    setSelectedIds(new Set([logId]));
+    setTargetNavLog({ id: logId, timestamp: Date.now() });
+  }, []);
+
+  // 自定义列宽 (持久化存储)
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_COLUMN_WIDTHS');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return defaultColumnWidths;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_COLUMN_WIDTHS', JSON.stringify(columnWidths));
+    } catch {}
+  }, [columnWidths]);
+
+  const handleResetColumnWidths = () => {
+    setColumnWidths(defaultColumnWidths);
+    try {
+      localStorage.setItem('LOGVIEWER_COLUMN_WIDTHS', JSON.stringify(defaultColumnWidths));
+    } catch {}
+  };
+
+  // 1. 过滤条件状态
+  const [filter, setFilter] = useState<FilterOptions>({
+    level: 'ALL',
+    selectedLevels: [],
+    searchKeyword: '',
+    searchColumn: 'ALL',
+    searchColumns: ['ALL'],
+    isRegex: false,
+    matchCase: false,
+    selectedModule: 'ALL',
+    selectedThread: 'ALL',
+    rangeKeyword: '',
+    startTime: '',
+    endTime: '',
+    isUtcOffset: false,
+    utcOffsetHours: 8,
+    highlightKeyword: '',
+    highlightMatchCase: false,
+    highlightIsRegex: false,
+    wordWrap: true,
+  });
+
+  // 2. 显示密度 (compact: 20px / normal: 24px / relaxed: 28px) (持久化存储)
+  const [density, setDensity] = useState<DisplayDensity>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_DENSITY');
+      if (saved === 'compact' || saved === 'normal' || saved === 'relaxed') return saved;
+    } catch {}
+    return 'normal';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_DENSITY', density);
+    } catch {}
+  }, [density]);
+
+  // 3. 列显示/隐藏选择器 (默认隐藏 线程ID 和 内存地址，支持持久化)
+  const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_COLUMN_VISIBILITY');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      index: true,
+      timestamp: true,
+      level: true,
+      requestId: true,
+      operationDesc: true,
+      functionName: true,
+      threadId: false,      // 默认隐藏线程ID
+      memoryAddress: false, // 默认隐藏内存地址
+      module: true,
+      fileName: true,
+      lineNumber: true,
+    };
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_COLUMN_VISIBILITY', JSON.stringify(columnVisibility));
+    } catch {}
+  }, [columnVisibility]);
+
+  // 4. 向后兼容样式配置 (默认关闭: 物理零跳动; 开启后支持旧版加粗与徽章高亮)
+  const [legacyBoldSelection, setLegacyBoldSelection] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('LOGVIEWER_LEGACY_BOLD_SELECTION') === 'true';
+    } catch {}
+    return false;
+  });
+
+  const [legacyHighlightStyle, setLegacyHighlightStyle] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('LOGVIEWER_LEGACY_HIGHLIGHT_STYLE') === 'true';
+    } catch {}
+    return false;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_LEGACY_BOLD_SELECTION', String(legacyBoldSelection));
+    } catch {}
+  }, [legacyBoldSelection]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_LEGACY_HIGHLIGHT_STYLE', String(legacyHighlightStyle));
+    } catch {}
+  }, [legacyHighlightStyle]);
+
+  // 核心：处理文件解析与装载
+  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number) => {
+    setIsLoading(true);
+    setSelectedIds(new Set());
+    // 使用 requestAnimationFrame / setTimeout 避免大文本解析卡死 UI
+    setTimeout(() => {
+      const { logs: parsedLogs, stats: parsedStats } = parseLogContent(content, fileName, fileSize);
+      setLogs(parsedLogs);
+      setStats(parsedStats);
+      setIsLoading(false);
+    }, 10);
+  }, []);
+
+  // 生成并装载示例数据
+  const handleLoadSample = useCallback((count: number) => {
+    setIsLoading(true);
+    setSelectedIds(new Set());
+    setTimeout(() => {
+      const sampleText = generateSampleLogsText(count);
+      const fakeSize = sampleText.length * 2;
+      const { logs: parsedLogs, stats: parsedStats } = parseLogContent(
+        sampleText,
+        `sample_application_${count}.log`,
+        fakeSize
+      );
+      setLogs(parsedLogs);
+      setStats(parsedStats);
+      setIsLoading(false);
+    }, 20);
+  }, []);
+
+  // 打开本地文件选择器
+  const handleSelectFile = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.log,.txt,.out,.csv,text/*';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const content = event.target?.result as string;
+          handleLoadContent(content, file.name, file.size);
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  };
+
+  // 清除/重置
+  const handleClear = () => {
+    setLogs([]);
+    setStats(null);
+    setSelectedIds(new Set());
+  };
+
+  // 全局拖拽支持
+  const handleGlobalDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleGlobalDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleGlobalDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const content = event.target?.result as string;
+        handleLoadContent(content, file.name, file.size);
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // 提取日志中所有唯一的 Module 模块列表
+  const uniqueModules = useMemo(() => {
+    const set = new Set<string>();
+    logs.forEach((log) => {
+      if (log.success && log.fields?.module) {
+        set.add(log.fields.module);
+      }
+    });
+    return Array.from(set).sort();
+  }, [logs]);
+
+  // 提取日志中所有唯一的 Thread 线程列表
+  const uniqueThreads = useMemo(() => {
+    const set = new Set<string>();
+    logs.forEach((log) => {
+      if (log.success && log.fields?.threadId) {
+        set.add(log.fields.threadId);
+      }
+    });
+    return Array.from(set).sort();
+  }, [logs]);
+
+  // 核心过滤器计算：处理区间筛选、时间精准筛选(含UTC转换)、日志级别、模块、线程筛选 (全文搜索改为精准定位导航)
+  const filteredLogs = useMemo(() => {
+    if (!logs || logs.length === 0) return [];
+
+    const {
+      level,
+      selectedLevels = [],
+      selectedModule,
+      selectedThread,
+      rangeKeyword,
+      startTime,
+      endTime,
+      isUtcOffset,
+      utcOffsetHours,
+    } = filter;
+
+    const isAllLevels = selectedLevels.length === 0 || selectedLevels.includes('ALL');
+
+    let baseLogs = logs;
+
+    // 1. 区间筛选：从 rangeKeyword 首次出现的行 ~ 末次出现的行
+    if (rangeKeyword && rangeKeyword.trim()) {
+      const kw = rangeKeyword.trim();
+      const firstIdx = baseLogs.findIndex((log) => log.rawText.includes(kw));
+      if (firstIdx === -1) {
+        return []; // 没找到区间起始行
+      }
+      let lastIdx = -1;
+      for (let i = baseLogs.length - 1; i >= 0; i--) {
+        if (baseLogs[i].rawText.includes(kw)) {
+          lastIdx = i;
+          break;
+        }
+      }
+      if (firstIdx !== -1 && lastIdx !== -1 && lastIdx >= firstIdx) {
+        baseLogs = baseLogs.slice(firstIdx, lastIdx + 1);
+      }
+    }
+
+    // 2. 时间范围解析（精确到毫秒，支持 GMT+8 自动转换 UTC）
+    const startMs = parseInputTimeToMs(startTime, isUtcOffset, utcOffsetHours);
+    const endMs = parseInputTimeToMs(endTime, isUtcOffset, utcOffsetHours);
+
+    return baseLogs.filter((log) => {
+      // 级别筛选 (支持多选，未选/选全部时默认为全部)
+      if (!isAllLevels) {
+        let matched = false;
+        for (const lvl of selectedLevels) {
+          if (lvl === 'FAILED_ONLY') {
+            if (!log.success) {
+              matched = true;
+              break;
+            }
+          } else {
+            if (log.success && log.fields?.level === lvl) {
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (!matched) return false;
+      } else if (level && level !== 'ALL') {
+        if (level === 'FAILED_ONLY') {
+          if (log.success) return false;
+        } else {
+          if (!log.success || log.fields?.level !== level) return false;
+        }
+      }
+
+      // 模块筛选
+      if (selectedModule !== 'ALL') {
+        if (!log.success || log.fields?.module !== selectedModule) return false;
+      }
+
+      // 线程筛选
+      if (selectedThread !== 'ALL') {
+        if (!log.success || log.fields?.threadId !== selectedThread) return false;
+      }
+
+      // 时间精确到毫秒筛选
+      if (startMs !== null || endMs !== null) {
+        if (!log.fields?.timestamp) return false;
+        const logMs = parseLogTimestampToMs(log.fields.timestamp);
+        if (logMs === null) return false;
+        if (startMs !== null && logMs < startMs) return false;
+        if (endMs !== null && logMs > endMs) return false;
+      }
+
+      return true;
+    });
+  }, [logs, filter]);
+
+  // 计算全文搜索匹配的日志 ID 列表 (支持指定单列/多列与全文搜索，用于定位导航与条数统计)
+  const searchMatchLogIds = useMemo(() => {
+    if (!filter.searchKeyword || !filter.searchKeyword.trim()) return [];
+    let regex: RegExp | null = null;
+    try {
+      const pattern = filter.isRegex ? filter.searchKeyword : filter.searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      regex = new RegExp(pattern, filter.matchCase ? 'g' : 'gi');
+    } catch {
+      return [];
+    }
+    const ids: number[] = [];
+    const searchCols = filter.searchColumns && filter.searchColumns.length > 0 
+      ? filter.searchColumns 
+      : (filter.searchColumn ? [filter.searchColumn] : ['ALL']);
+    const isAllCols = searchCols.includes('ALL');
+
+    for (const log of filteredLogs) {
+      regex.lastIndex = 0;
+      let matched = false;
+      if (isAllCols) {
+        matched = regex.test(log.rawText);
+      } else {
+        for (const colKey of searchCols) {
+          regex.lastIndex = 0;
+          let val = '';
+          if (colKey === 'lineNumber') {
+            val = String(log.lineNumber);
+          } else if (log.success && log.fields) {
+            val = (log.fields as Record<string, string>)[colKey] || '';
+          }
+          if (val && regex.test(val)) {
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (matched) {
+        ids.push(log.id);
+      }
+    }
+    return ids;
+  }, [filteredLogs, filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns]);
+
+  const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
+  const firstVisibleIndexRef = useRef<number>(0);
+
+  const handleFirstVisibleIndexChange = useCallback((index: number) => {
+    firstVisibleIndexRef.current = index;
+  }, []);
+
+  const activeSearchLogId = useMemo(() => {
+    if (searchMatchLogIds.length === 0) return null;
+    const idx = Math.min(Math.max(0, currentMatchIndex), searchMatchLogIds.length - 1);
+    return searchMatchLogIds[idx];
+  }, [searchMatchLogIds, currentMatchIndex]);
+
+  // 点击下一条匹配项：导航并选中
+  const handleNextMatch = useCallback(() => {
+    if (searchMatchLogIds.length === 0) return;
+    const nextIdx = (currentMatchIndex + 1) % searchMatchLogIds.length;
+    setCurrentMatchIndex(nextIdx);
+    const targetLogId = searchMatchLogIds[nextIdx];
+    setSelectedIds(new Set([targetLogId]));
+    setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
+  }, [searchMatchLogIds, currentMatchIndex]);
+
+  // 点击上一条匹配项：导航并选中
+  const handlePrevMatch = useCallback(() => {
+    if (searchMatchLogIds.length === 0) return;
+    const prevIdx = (currentMatchIndex - 1 + searchMatchLogIds.length) % searchMatchLogIds.length;
+    setCurrentMatchIndex(prevIdx);
+    const targetLogId = searchMatchLogIds[prevIdx];
+    setSelectedIds(new Set([targetLogId]));
+    setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
+  }, [searchMatchLogIds, currentMatchIndex]);
+
+  // 点击搜索按钮或按 Enter：以当前屏幕可视区域首行为基准，搜索后一个匹配目标并导航并选中
+  const handleTriggerSearch = useCallback(() => {
+    if (searchMatchLogIds.length === 0 || filteredLogs.length === 0) return;
+
+    const logIndexMap = new Map<number, number>();
+    filteredLogs.forEach((l, idx) => {
+      logIndexMap.set(l.id, idx);
+    });
+
+    const v = firstVisibleIndexRef.current;
+
+    // 寻找在当前屏幕可视区域首行之后（或所在行）的第一个匹配项
+    let targetMatchIdx = -1;
+
+    for (let i = 0; i < searchMatchLogIds.length; i++) {
+      const matchLogId = searchMatchLogIds[i];
+      const rowIdx = logIndexMap.get(matchLogId) ?? -1;
+
+      // 如果当前已经选中了该项并且就在当前视口位置，则寻找下一个严格大于当前位置的
+      const isAlreadySelected = selectedIds.has(matchLogId);
+      if (isAlreadySelected) {
+        if (rowIdx > v) {
+          targetMatchIdx = i;
+          break;
+        }
+      } else {
+        if (rowIdx >= v) {
+          targetMatchIdx = i;
+          break;
+        }
+      }
+    }
+
+    // 如果在当前屏幕可视区域之后没有更多匹配项，则循环回到首个匹配项 (0)
+    if (targetMatchIdx === -1) {
+      targetMatchIdx = 0;
+    }
+
+    setCurrentMatchIndex(targetMatchIdx);
+    const targetLogId = searchMatchLogIds[targetMatchIdx];
+    setSelectedIds(new Set([targetLogId]));
+    setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
+  }, [searchMatchLogIds, filteredLogs, selectedIds]);
+
+  // 更新 partial filter
+  const handleFilterChange = (updated: Partial<FilterOptions>) => {
+    setFilter((prev) => ({ ...prev, ...updated }));
+  };
+
+  // 导出 JSON
+  const handleExportJSON = () => {
+    const exportData = filteredLogs.map((l) => ({
+      lineNumber: l.lineNumber,
+      success: l.success,
+      fields: l.fields || null,
+      rawText: l.rawText,
+    }));
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `log_export_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 导出 CSV
+  const handleExportCSV = () => {
+    const headers = ['Line', 'Timestamp', 'Level', 'RequestID', 'OperationDescription', 'FunctionName', 'ThreadID', 'MemoryAddress', 'Module', 'FileName', 'LineNumber', 'Status', 'RawText'];
+    const rows = filteredLogs.map((l) => {
+      if (l.success && l.fields) {
+        return [
+          l.lineNumber,
+          `"${l.fields.timestamp.replace(/"/g, '""')}"`,
+          `"${l.fields.level}"`,
+          `"${l.fields.requestId}"`,
+          `"${l.fields.operationDesc.replace(/"/g, '""')}"`,
+          `"${l.fields.functionName}"`,
+          `"${l.fields.threadId}"`,
+          `"${l.fields.memoryAddress}"`,
+          `"${l.fields.module}"`,
+          `"${l.fields.fileName}"`,
+          `"${l.fields.lineNumber}"`,
+          'SUCCESS',
+          `"${l.rawText.replace(/"/g, '""')}"`,
+        ].join(',');
+      } else {
+        return [l.lineNumber, '', '', '', '', '', '', '', '', '', '', 'FAILED', `"${l.rawText.replace(/"/g, '""')}"`].join(',');
+      }
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `log_export_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 复制当前选中的多行日志原始文本
+  const handleCopySelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const selectedLogsList = filteredLogs.filter((l) => selectedIds.has(l.id));
+    const rawTextJoined = selectedLogsList.map((l) => l.rawText).join('\n');
+    navigator.clipboard.writeText(rawTextJoined);
+  }, [filteredLogs, selectedIds]);
+
+  // 全选过滤结果
+  const handleSelectAll = useCallback(() => {
+    const allSet = new Set(filteredLogs.map((l) => l.id));
+    setSelectedIds(allSet);
+  }, [filteredLogs]);
+
+  // 清空选择
+  const handleClearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  // 复制过滤后的原始日志
+  const handleCopyFilteredRaw = () => {
+    const rawTextLines = filteredLogs.map((l) => l.rawText).join('\n');
+    navigator.clipboard.writeText(rawTextLines);
+  };
+
+  return (
+    <div
+      onDragOver={handleGlobalDragOver}
+      onDragLeave={handleGlobalDragLeave}
+      onDrop={handleGlobalDrop}
+      className={`h-screen w-screen flex flex-col overflow-hidden font-sans relative select-none ${
+        theme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-slate-950 text-slate-100'
+      }`}
+    >
+      {/* 拖拽全屏 Visual Hover Highlight */}
+      {isDragOver && (
+        <div className={`absolute inset-0 z-50 backdrop-blur-sm border-4 border-dashed flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-150 ${
+          theme === 'light' ? 'bg-blue-100/90 border-blue-500 text-blue-900' : 'bg-blue-950/80 border-blue-400 text-blue-200'
+        }`}>
+          <Upload className="w-16 h-16 mb-4 text-blue-500 animate-bounce" />
+          <h2 className="text-2xl font-bold">释放鼠标即可立即加载解析日志文件</h2>
+          <p className="text-sm mt-2 font-mono">支持任意大小的 .log / .txt 文件</p>
+        </div>
+      )}
+
+      {/* Loading 解析中 Indicator */}
+      {isLoading && (
+        <div className={`absolute inset-0 z-40 backdrop-blur-sm flex flex-col items-center justify-center ${
+          theme === 'light' ? 'bg-white/80' : 'bg-slate-950/70'
+        }`}>
+          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+          <p className={`text-sm font-medium ${theme === 'light' ? 'text-slate-800' : 'text-slate-200'}`}>正在解析日志文本...</p>
+          <p className={`text-xs font-mono mt-1 ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>扫描顶层括号匹配与 10 字段解构中</p>
+        </div>
+      )}
+
+      {/* 顶部 Header Dashboard */}
+      <HeaderDashboard
+        stats={stats}
+        onSelectFile={handleSelectFile}
+        onLoadSample={handleLoadSample}
+        onClear={handleClear}
+        isLoading={isLoading}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
+
+      {/* 主面板内容区 */}
+      {logs.length === 0 ? (
+        <DropZone
+          onFileLoaded={handleLoadContent}
+          onLoadSample={handleLoadSample}
+          isLoading={isLoading}
+          theme={theme}
+        />
+      ) : (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {/* 工具栏 Toolbar */}
+          <Toolbar
+            filter={filter}
+            onFilterChange={handleFilterChange}
+            density={density}
+            onDensityChange={setDensity}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={setColumnVisibility}
+            stats={stats}
+            filteredCount={filteredLogs.length}
+            uniqueModules={uniqueModules}
+            uniqueThreads={uniqueThreads}
+            selectedCount={selectedIds.size}
+            onCopySelected={handleCopySelected}
+            onSelectAll={handleSelectAll}
+            onClearSelection={handleClearSelection}
+            onExportJSON={handleExportJSON}
+            onExportCSV={handleExportCSV}
+            onCopyFilteredRaw={handleCopyFilteredRaw}
+            totalMatches={searchMatchLogIds.length}
+            currentMatchIndex={currentMatchIndex}
+            onTriggerSearch={handleTriggerSearch}
+            onNextMatch={handleNextMatch}
+            onPrevMatch={handlePrevMatch}
+            theme={theme}
+            borderIntensity={borderIntensity}
+            onBorderIntensityChange={setBorderIntensity}
+            onResetColumnWidths={handleResetColumnWidths}
+            onJumpToLine={handleJumpToLine}
+            legacyBoldSelection={legacyBoldSelection}
+            onLegacyBoldSelectionChange={setLegacyBoldSelection}
+            legacyHighlightStyle={legacyHighlightStyle}
+            onLegacyHighlightStyleChange={setLegacyHighlightStyle}
+          />
+
+          {/* 高密度虚拟滚动表格 VirtualLogTable */}
+          <VirtualLogTable
+            logs={filteredLogs}
+            density={density}
+            columnVisibility={columnVisibility}
+            selectedIds={selectedIds}
+            onSelectionChange={setSelectedIds}
+            highlightKeyword={filter.highlightKeyword}
+            highlightMatchCase={filter.highlightMatchCase}
+            highlightIsRegex={filter.highlightIsRegex}
+            matchCase={filter.matchCase}
+            wordWrap={filter.wordWrap}
+            filter={filter}
+            onFilterChange={handleFilterChange}
+            activeSearchLogId={activeSearchLogId}
+            searchKeyword={filter.searchKeyword}
+            searchMatchCase={filter.matchCase}
+            searchIsRegex={filter.isRegex}
+            columnWidths={columnWidths}
+            onColumnWidthsChange={setColumnWidths}
+            theme={theme}
+            borderIntensity={borderIntensity}
+            jumpToLine={jumpToLine}
+            targetNavLog={targetNavLog}
+            onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+            legacyBoldSelection={legacyBoldSelection}
+            legacyHighlightStyle={legacyHighlightStyle}
+          />
+
+          {/* 浮动 ERROR 快捷导航控件 */}
+          <FloatingErrorNav
+            filteredLogs={filteredLogs}
+            selectedIds={selectedIds}
+            onSelectLog={(id) => setSelectedIds(new Set([id]))}
+            onNavigateToLog={handleNavigateToLog}
+            theme={theme}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

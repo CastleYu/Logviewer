@@ -1,0 +1,6 @@
+{
+  "name": "LogViewer Pro",
+  "description": "High-density log parser and visualizer with nested bracket state machine, virtual scrolling, and widescreen optimization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

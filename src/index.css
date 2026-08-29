@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+}
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+  }
+
+  html, body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.01em;
+  }
+
+  /* Dense tabular typography for code and log viewers */
+  .font-mono-dense, .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "zero", "ss01", "ss03", "calt", "liga";
+  }
+}
+
+/* Glassmorphism & Subtle Glows */
+.glass-panel-dark {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.glass-panel-light {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Custom sleek high-density dark & light scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: rgba(203, 213, 225, 0.75);
+}
+
+.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.95);
+}
+
+/* High contrast text selection */
+::selection {
+  background-color: rgba(99, 102, 241, 0.35);
+  color: inherit;
+}
+
+/* Floating copy toast upward fade-out animation */
+@keyframes floatUpAndFade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.92);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -8px) scale(1);
+  }
+  75% {
+    opacity: 0.95;
+    transform: translate(-50%, -24px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -36px) scale(0.95);
+  }
+}
+
+.animate-float-up-fade {
+  animation: floatUpAndFade 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 对应日志级别的深色底外发光脉冲动画 */
+
+/* 1. ERROR / FATAL 级别 (深玫瑰红底 + 红色脉冲) */
+@keyframes navTargetPulseError {
+  0% {
+    background-color: #9f1239 !important; /* rose-800 */
+    color: #ffffff !important;
+    outline: 2px solid #f43f5e;
+    outline-offset: -2px;
+    box-shadow: 0 0 24px rgba(244, 63, 94, 0.95), inset 0 0 16px rgba(244, 63, 94, 0.6);
+  }
+  35% {
+    background-color: #be123c !important; /* rose-700 */
+    color: #ffffff !important;
+    outline: 3px solid #fb7185;
+    outline-offset: -2px;
+    box-shadow: 0 0 32px rgba(251, 113, 133, 1), inset 0 0 20px rgba(251, 113, 133, 0.7);
+  }
+  100% {
+    outline: 0px solid transparent;
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+}
+
+/* 2. WARN 级别 (深琥珀橙底 + 橙色脉冲) */
+@keyframes navTargetPulseWarn {
+  0% {
+    background-color: #92400e !important; /* amber-800 */
+    color: #ffffff !important;
+    outline: 2px solid #f59e0b;
+    outline-offset: -2px;
+    box-shadow: 0 0 24px rgba(245, 158, 11, 0.95), inset 0 0 16px rgba(245, 158, 11, 0.6);
+  }
+  35% {
+    background-color: #b45309 !important; /* amber-700 */
+    color: #ffffff !important;
+    outline: 3px solid #fbbf24;
+    outline-offset: -2px;
+    box-shadow: 0 0 32px rgba(251, 191, 36, 1), inset 0 0 20px rgba(251, 191, 36, 0.7);
+  }
+  100% {
+    outline: 0px solid transparent;
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+}
+
+/* 3. INFO 级别 (深天蓝底 + 蓝色脉冲) */
+@keyframes navTargetPulseInfo {
+  0% {
+    background-color: #075985 !important; /* sky-800 */
+    color: #ffffff !important;
+    outline: 2px solid #38bdf8;
+    outline-offset: -2px;
+    box-shadow: 0 0 24px rgba(56, 189, 248, 0.95), inset 0 0 16px rgba(56, 189, 248, 0.6);
+  }
+  35% {
+    background-color: #0284c7 !important; /* sky-600 */
+    color: #ffffff !important;
+    outline: 3px solid #7dd3fc;
+    outline-offset: -2px;
+    box-shadow: 0 0 32px rgba(125, 211, 252, 1), inset 0 0 20px rgba(125, 211, 252, 0.7);
+  }
+  100% {
+    outline: 0px solid transparent;
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+}
+
+/* 4. DEFAULT 级别 (深靛蓝底 + 靛紫脉冲) */
+@keyframes navTargetPulseDefault {
+  0% {
+    background-color: #3730a3 !important; /* indigo-800 */
+    color: #ffffff !important;
+    outline: 2px solid #818cf8;
+    outline-offset: -2px;
+    box-shadow: 0 0 24px rgba(129, 140, 248, 0.95), inset 0 0 16px rgba(129, 140, 248, 0.6);
+  }
+  35% {
+    background-color: #4338ca !important; /* indigo-700 */
+    color: #ffffff !important;
+    outline: 3px solid #a5b4fc;
+    outline-offset: -2px;
+    box-shadow: 0 0 32px rgba(165, 180, 252, 1), inset 0 0 20px rgba(165, 180, 252, 0.7);
+  }
+  100% {
+    outline: 0px solid transparent;
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+}
+
+.animate-nav-target-error {
+  animation: navTargetPulseError 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  z-index: 30 !important;
+}
+
+.animate-nav-target-warn {
+  animation: navTargetPulseWarn 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  z-index: 30 !important;
+}
+
+.animate-nav-target-info {
+  animation: navTargetPulseInfo 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  z-index: 30 !important;
+}
+
+.animate-nav-target-default {
+  animation: navTargetPulseDefault 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  z-index: 30 !important;
+}
+
