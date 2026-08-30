@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FilterOptions, DisplayDensity, ColumnVisibility, LogStats, ThemeMode, BorderIntensity, PinnedHighlight } from '../types';
+import { FilterOptions, DisplayDensity, ColumnVisibility, LogStats, ThemeMode, BorderIntensity, PinnedHighlight, ColumnFilterKey, FilterValue } from '../types';
+import { RuntimeFilterSummary } from '../config/logFormatTypes';
 import { HIGHLIGHT_COLOR_PRESETS } from '../utils/highlightColors';
+import { createNumericFilter, createTextFilter, isNumericFilterActive, isTextFilterActive } from '../utils/columnFilterUtils';
+import { DateRangeFilter } from './DateRangeFilter';
 import { 
   Search, 
   X, 
@@ -31,6 +34,7 @@ interface ToolbarProps {
   filteredCount: number;
   uniqueModules: string[];
   uniqueThreads: string[];
+  timeRange: [number, number] | null;
   selectedCount: number;
   onCopySelected: () => void;
   onSelectAll: () => void;
@@ -45,7 +49,7 @@ interface ToolbarProps {
   onNextMatch: () => void;
   onPrevMatch: () => void;
   // 主题与边框控制
-  theme?: ThemeMode;
+  theme: ThemeMode;
   borderIntensity?: BorderIntensity;
   onBorderIntensityChange?: (intensity: BorderIntensity) => void;
   onResetColumnWidths?: () => void;
@@ -55,9 +59,49 @@ interface ToolbarProps {
   onLegacyBoldSelectionChange?: (val: boolean) => void;
   legacyHighlightStyle?: boolean;
   onLegacyHighlightStyleChange?: (val: boolean) => void;
+  showLegacyFilters?: boolean;
+  searchableFields?: Array<{ key: string; label: string }>;
+  configuredFilterItems?: RuntimeFilterSummary[];
+  onClearConfiguredFilter?: (fieldId: string) => void;
+  onClearAllConfiguredFilters?: () => void;
 }
 
-const searchableColumns = [
+interface ActiveColumnFilter {
+  key: string;
+  label: string;
+  summary: string;
+}
+
+function activeColumnFilters(filter: FilterOptions): ActiveColumnFilter[] {
+  const items: ActiveColumnFilter[] = [];
+  const numberFilter = filter.columnFilters.index;
+  if (isNumericFilterActive(numberFilter)) {
+    items.push({ key: ColumnFilterKey.Index, label: '序号', summary: `${numberFilter.min || '起点'} – ${numberFilter.max || '末尾'}` });
+  }
+  if (filter.startTime || filter.endTime) {
+    items.push({ key: ColumnFilterKey.Timestamp, label: '时间戳', summary: `${filter.startTime || '最早'} → ${filter.endTime || '最晚'}` });
+  }
+  const levels = filter.selectedLevels.filter((value) => value !== FilterValue.All);
+  if (levels.length > 0) items.push({ key: ColumnFilterKey.Level, label: '级别', summary: levels.map((value) => value === FilterValue.FailedOnly ? '解析失败' : value).join('、') });
+  if (filter.selectedModule !== FilterValue.All) items.push({ key: ColumnFilterKey.Module, label: '模块', summary: filter.selectedModule });
+  if (filter.selectedThread !== FilterValue.All) items.push({ key: ColumnFilterKey.ThreadId, label: '线程ID', summary: filter.selectedThread });
+
+  const textItems: Array<[ColumnFilterKey, string, typeof filter.columnFilters.requestId]> = [
+    [ColumnFilterKey.RequestId, '请求ID', filter.columnFilters.requestId],
+    [ColumnFilterKey.OperationDesc, '操作描述', filter.columnFilters.operationDesc],
+    [ColumnFilterKey.FunctionName, '函数名', filter.columnFilters.functionName],
+    [ColumnFilterKey.MemoryAddress, '内存地址', filter.columnFilters.memoryAddress],
+    [ColumnFilterKey.FileName, '文件名', filter.columnFilters.fileName],
+  ];
+  for (const [key, label, value] of textItems) {
+    if (!isTextFilterActive(value)) continue;
+    const prefix = value.isRegex ? '正则：' : value.matchCase ? '区分大小写：' : '包含：';
+    items.push({ key, label, summary: `${prefix}${value.value}` });
+  }
+  return items;
+}
+
+const defaultSearchableColumns = [
   { key: 'ALL', label: '全部列 / 原始文本' },
   { key: 'operationDesc', label: '操作描述' },
   { key: 'requestId', label: '请求ID' },
@@ -82,6 +126,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   filteredCount,
   uniqueModules,
   uniqueThreads,
+  timeRange,
   selectedCount,
   onCopySelected,
   onSelectAll,
@@ -94,7 +139,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onTriggerSearch,
   onNextMatch,
   onPrevMatch,
-  theme = 'dark',
+  theme,
   borderIntensity = 'medium',
   onBorderIntensityChange,
   onResetColumnWidths,
@@ -103,13 +148,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onLegacyBoldSelectionChange,
   legacyHighlightStyle = false,
   onLegacyHighlightStyleChange,
+  showLegacyFilters = true,
+  searchableFields,
+  configuredFilterItems = [],
+  onClearConfiguredFilter,
+  onClearAllConfiguredFilters,
 }) => {
   const [showColumnsMenu, setShowColumnsMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showRangeMenu, setShowRangeMenu] = useState(false);
+  const [showDateMenu, setShowDateMenu] = useState(false);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
   const [showSearchColsMenu, setShowSearchColsMenu] = useState(false);
   const [showPinnedMenu, setShowPinnedMenu] = useState(false);
+  const [showColumnFiltersMenu, setShowColumnFiltersMenu] = useState(false);
   const [editingColorPinId, setEditingColorPinId] = useState<string | null>(null);
   const [jumpInput, setJumpInput] = useState('');
   const [jumpError, setJumpError] = useState<string | null>(null);
@@ -125,6 +177,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         setShowColumnsMenu(false);
         setShowExportMenu(false);
         setShowRangeMenu(false);
+        setShowDateMenu(false);
         setShowStyleMenu(false);
         setShowSearchColsMenu(false);
         setShowPinnedMenu(false);
@@ -134,6 +187,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (showColumnsMenu || showExportMenu || showRangeMenu || showDateMenu || showStyleMenu || showSearchColsMenu || showPinnedMenu) {
+      setShowColumnFiltersMenu(false);
+    }
+  }, [showColumnsMenu, showExportMenu, showRangeMenu, showDateMenu, showStyleMenu, showSearchColsMenu, showPinnedMenu]);
 
   const pinnedHighlights = filter.pinnedHighlights || [];
 
@@ -186,6 +245,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   // 快捷键 Ctrl+G / Cmd+G 聚焦跳转行输入框
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowColumnsMenu(false);
+        setShowExportMenu(false);
+        setShowRangeMenu(false);
+        setShowDateMenu(false);
+        setShowStyleMenu(false);
+        setShowSearchColsMenu(false);
+        setShowPinnedMenu(false);
+        setShowColumnFiltersMenu(false);
+        setEditingColorPinId(null);
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
         e.preventDefault();
         jumpInputRef.current?.focus();
@@ -200,6 +271,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       if (!prev) {
         setShowExportMenu(false);
         setShowRangeMenu(false);
+        setShowDateMenu(false);
         setShowStyleMenu(false);
         setShowSearchColsMenu(false);
       }
@@ -212,6 +284,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       if (!prev) {
         setShowColumnsMenu(false);
         setShowRangeMenu(false);
+        setShowDateMenu(false);
         setShowStyleMenu(false);
         setShowSearchColsMenu(false);
       }
@@ -224,6 +297,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       if (!prev) {
         setShowColumnsMenu(false);
         setShowExportMenu(false);
+        setShowDateMenu(false);
         setShowStyleMenu(false);
         setShowSearchColsMenu(false);
       }
@@ -237,6 +311,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         setShowColumnsMenu(false);
         setShowExportMenu(false);
         setShowRangeMenu(false);
+        setShowDateMenu(false);
         setShowSearchColsMenu(false);
       }
       return !prev;
@@ -249,10 +324,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         setShowColumnsMenu(false);
         setShowExportMenu(false);
         setShowRangeMenu(false);
+        setShowDateMenu(false);
         setShowStyleMenu(false);
       }
       return !prev;
     });
+  };
+
+  const handleDateOpenChange = (open: boolean) => {
+    if (open) {
+      setShowColumnsMenu(false);
+      setShowExportMenu(false);
+      setShowRangeMenu(false);
+      setShowStyleMenu(false);
+      setShowSearchColsMenu(false);
+        setShowPinnedMenu(false);
+        setShowColumnFiltersMenu(false);
+    }
+    setShowDateMenu(open);
   };
 
   const handleJumpSubmit = (e: React.FormEvent) => {
@@ -273,6 +362,89 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   };
 
   const isLight = theme === 'light';
+  const currentColumnFilters = showLegacyFilters ? activeColumnFilters(filter) : configuredFilterItems;
+  const availableSearchColumns = searchableFields
+    ? [{ key: 'ALL', label: '全部列 / 原始文本' }, ...searchableFields]
+    : defaultSearchableColumns;
+
+  const handleToggleColumnFiltersMenu = () => {
+    setShowColumnFiltersMenu((previous) => {
+      if (!previous) {
+        setShowColumnsMenu(false);
+        setShowExportMenu(false);
+        setShowRangeMenu(false);
+        setShowDateMenu(false);
+        setShowStyleMenu(false);
+        setShowSearchColsMenu(false);
+        setShowPinnedMenu(false);
+      }
+      return !previous;
+    });
+  };
+
+  const clearColumnFilter = (key: string) => {
+    if (!showLegacyFilters) {
+      onClearConfiguredFilter?.(key);
+      return;
+    }
+    switch (key) {
+      case ColumnFilterKey.Index:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, index: createNumericFilter() } });
+        break;
+      case ColumnFilterKey.Timestamp:
+        onFilterChange({ startTime: '', endTime: '' });
+        break;
+      case ColumnFilterKey.Level:
+        onFilterChange({ selectedLevels: [], level: FilterValue.All });
+        break;
+      case ColumnFilterKey.Module:
+        onFilterChange({ selectedModule: FilterValue.All });
+        break;
+      case ColumnFilterKey.ThreadId:
+        onFilterChange({ selectedThread: FilterValue.All });
+        break;
+      case ColumnFilterKey.RequestId:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, requestId: createTextFilter() } });
+        break;
+      case ColumnFilterKey.OperationDesc:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, operationDesc: createTextFilter() } });
+        break;
+      case ColumnFilterKey.FunctionName:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, functionName: createTextFilter() } });
+        break;
+      case ColumnFilterKey.MemoryAddress:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, memoryAddress: createTextFilter() } });
+        break;
+      case ColumnFilterKey.FileName:
+        onFilterChange({ columnFilters: { ...filter.columnFilters, fileName: createTextFilter() } });
+        break;
+    }
+  };
+
+  const clearAllColumnFilters = () => {
+    if (!showLegacyFilters) {
+      onClearAllConfiguredFilters?.();
+      setShowColumnFiltersMenu(false);
+      return;
+    }
+    onFilterChange({
+      columnFilters: {
+        index: createNumericFilter(),
+        requestId: createTextFilter(),
+        operationDesc: createTextFilter(),
+        functionName: createTextFilter(),
+        memoryAddress: createTextFilter(),
+        fileName: createTextFilter(),
+      },
+      startTime: '',
+      endTime: '',
+      selectedLevels: [],
+      level: FilterValue.All,
+      selectedModule: FilterValue.All,
+      selectedThread: FilterValue.All,
+    });
+    setShowColumnFiltersMenu(false);
+  };
 
   const triggerFloatingToast = (text: string, e?: React.MouseEvent) => {
     let x = window.innerWidth / 2;
@@ -366,7 +538,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       return '全部列';
     }
     if (currentSearchCols.length === 1) {
-      const matched = searchableColumns.find((c) => c.key === currentSearchCols[0]);
+      const matched = availableSearchColumns.find((c) => c.key === currentSearchCols[0]);
       return matched ? matched.label : currentSearchCols[0];
     }
     return `已选 ${currentSearchCols.length} 列`;
@@ -410,7 +582,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       */}
       <div className="flex items-center justify-between gap-2 relative">
         {/* 左侧：级别选择组件 */}
-        <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
+        {showLegacyFilters ? <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
           <span className={`text-[11px] font-semibold mr-0.5 flex items-center gap-1 shrink-0 ${
             isLight ? 'text-slate-500' : 'text-slate-400'
           }`}>
@@ -454,7 +626,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               </button>
             );
           })}
-        </div>
+        </div> : <div className={`flex items-center gap-1.5 text-[11px] font-medium ${isLight ? 'text-slate-600' : 'text-slate-400'}`}><SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" /><span>字段筛选由当前格式配置定义</span></div>}
 
         {/* 中间：已选行数显示组件 */}
         <div className="flex-1 flex justify-center items-center pointer-events-auto min-w-[120px]">
@@ -491,10 +663,58 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           )}
         </div>
 
+        {currentColumnFilters.length > 0 ? (
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleColumnFiltersMenu}
+              aria-expanded={showColumnFiltersMenu}
+              className={`h-[26px] flex items-center gap-1.5 rounded-md border px-2 text-xs font-semibold transition-colors cursor-pointer ${
+                isLight
+                  ? 'bg-indigo-50 text-indigo-900 border-indigo-300 hover:bg-indigo-100'
+                  : 'bg-indigo-950/80 text-indigo-200 border-indigo-700 hover:bg-indigo-900/80'
+              }`}
+              title="查看当前列筛选"
+            >
+              <Filter className="w-3.5 h-3.5 text-indigo-500" />
+              <span>列筛选</span>
+              <span className="min-w-4 h-4 px-1 rounded bg-indigo-600 text-white text-[9px] font-mono flex items-center justify-center">{currentColumnFilters.length}</span>
+            </button>
+
+            {showColumnFiltersMenu ? (
+              <div className={`absolute right-0 top-full mt-1.5 w-[min(340px,calc(100vw-24px))] rounded-xl border shadow-[0_14px_40px_rgba(15,23,42,0.22)] p-2.5 z-[100] ${
+                isLight ? 'bg-white border-slate-200 text-slate-800' : 'bg-slate-900 border-slate-700 text-slate-200'
+              }`}>
+                <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                  <div>
+                    <h3 className="text-xs font-semibold">当前列筛选</h3>
+                    <p className={`mt-0.5 text-[10px] ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>不同列之间按 AND 组合</p>
+                  </div>
+                  <button type="button" onClick={clearAllColumnFilters} className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline underline-offset-2 cursor-pointer">全部清除</button>
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {currentColumnFilters.map((item) => (
+                    <div key={item.key} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${isLight ? 'bg-slate-50' : 'bg-slate-950/70'}`}>
+                      <Filter className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-semibold">{item.label}</div>
+                        <div className={`truncate text-[10px] font-mono ${isLight ? 'text-slate-600' : 'text-slate-400'}`} title={item.summary}>{item.summary}</div>
+                      </div>
+                      <button type="button" onClick={() => clearColumnFilter(item.key)} className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-500/10 cursor-pointer" aria-label={`清除${item.label}筛选`}>
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* 右侧：配置项 (自动换行、样式设置、列设置、导出、复制日志) */}
         <div className="flex items-center gap-1.5 flex-wrap ml-auto">
           {/* 自动换行开关 */}
-          <button
+          {showLegacyFilters ? <button
             onClick={() => onFilterChange({ wordWrap: !filter.wordWrap })}
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs border transition-all cursor-pointer ${
               filter.wordWrap
@@ -509,7 +729,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <WrapText className="w-3.5 h-3.5 text-indigo-500" />
             <span>{filter.wordWrap ? '换行: 开' : '换行: 关'}</span>
-          </button>
+          </button> : null}
 
           {/* 样式设置 (整合边框和间距) */}
           <div className="relative">
@@ -576,6 +796,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   </div>
                 </div>
 
+                {showLegacyFilters ? <>
                 {/* 选项 2: 表格边框线度 */}
                 {onBorderIntensityChange && (
                   <div className="mb-2">
@@ -703,12 +924,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     重置默认列宽
                   </button>
                 )}
+                </> : null}
               </div>
             )}
           </div>
 
           {/* 列显隐 */}
-          <div className="relative">
+          {showLegacyFilters ? <div className="relative">
             <button
               onClick={handleToggleColumnsMenu}
               className={`flex items-center gap-1 px-2 py-1 rounded-md border cursor-pointer transition-all ${
@@ -752,7 +974,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 </div>
               </div>
             )}
-          </div>
+          </div> : null}
 
           {/* 导出 */}
           <div className="relative">
@@ -831,6 +1053,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       }`}>
         {/* 左侧：模块下拉列表 + 线程下拉列表 + 区间筛选 (统一输入/选择框组件高度 h-[30px]) */}
         <div className="flex items-center gap-1.5 flex-wrap">
+          {showLegacyFilters ? <>
           {/* 1. 模块下拉 */}
           <select
             disabled={isModuleDisabled}
@@ -878,6 +1101,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
+
+          <DateRangeFilter
+            filter={filter}
+            isOpen={showDateMenu}
+            onOpenChange={handleDateOpenChange}
+            onFilterChange={onFilterChange}
+            timeRange={timeRange}
+            theme={theme}
+          />
+          </> : null}
 
           {/* 3. 区间筛选 */}
           <div className="relative">
@@ -1191,7 +1424,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     搜索匹配目标列 (可多选)
                   </div>
                   <div className="space-y-0.5 max-h-56 overflow-y-auto pr-1">
-                    {searchableColumns.map((col) => {
+                    {availableSearchColumns.map((col) => {
                       const isChecked = col.key === 'ALL'
                         ? currentSearchCols.includes('ALL')
                         : currentSearchCols.includes(col.key);
@@ -1304,7 +1537,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </div>
 
           {/* 跳转行组件 (统一输入框容器高度 h-[30px]) */}
-          <form onSubmit={handleJumpSubmit} className="flex items-center gap-1.5">
+          {showLegacyFilters ? <><form onSubmit={handleJumpSubmit} className="flex items-center gap-1.5">
             <div className={`h-[30px] flex items-center rounded-md px-2 border shadow-2xs transition-all ${
               isLight ? 'bg-slate-50 border-slate-300 focus-within:border-indigo-500' : 'bg-slate-900 border-slate-800 focus-within:border-indigo-500/80'
             }`}>
@@ -1334,7 +1567,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </form>
           {jumpError && (
             <span className="text-[11px] text-rose-500 font-mono">{jumpError}</span>
-          )}
+          )}</> : null}
         </div>
       </div>
 

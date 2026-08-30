@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://logviewer.local/schemas/logviewer-config-1.0.json",
+  "title": "LogViewer format configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "formats"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "contractVersion": { "const": "1.0" },
+    "defaultFormat": { "type": "string", "minLength": 1 },
+    "formats": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/format" }
+    }
+  },
+  "$defs": {
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "record", "parsers", "fields"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean", "default": true },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "filePatterns": { "type": "array", "items": { "type": "string" } },
+            "priority": { "type": "integer" },
+            "probe": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "pattern"],
+              "properties": {
+                "kind": { "const": "regex" },
+                "pattern": { "type": "string" }
+              }
+            }
+          }
+        },
+        "record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "line" },
+            "encoding": { "type": "string" },
+            "skipEmpty": { "type": "boolean" }
+          }
+        },
+        "parsers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/parser" }
+        },
+        "onParseFailure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action"],
+          "properties": {
+            "action": { "enum": ["emit-unparsed", "reject"] },
+            "messageField": { "type": "string" }
+          }
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "input", "expect"],
+            "properties": {
+              "name": { "type": "string" },
+              "input": { "type": "string" },
+              "expect": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fields"],
+                "properties": {
+                  "parser": { "type": "string" },
+                  "fields": { "type": "object" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "parser": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "open", "close", "bindings"],
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "const": "bracketed" },
+            "open": { "type": "string", "minLength": 1 },
+            "close": { "type": "string", "minLength": 1 },
+            "nested": { "type": "boolean" },
+            "bindings": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "open", "close", "head", "body", "tail"],
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "const": "anchored-bracketed" },
+            "open": { "type": "string", "minLength": 1 },
+            "close": { "type": "string", "minLength": 1 },
+            "head": { "type": "array", "items": { "type": "string" } },
+            "body": { "type": "string" },
+            "tail": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "pattern"],
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "const": "regex" },
+            "pattern": { "type": "string" },
+            "flags": { "type": "string", "pattern": "^[imsu]*$" },
+            "remainderField": { "type": "string" },
+            "partial": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "bindings"],
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "const": "json" },
+            "bindings": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^\\$\\." } }
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "type", "filter"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" },
+        "label": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["timestamp", "level", "message", "request-id", "function", "thread-id", "memory-address", "module", "source-file", "source-line"] },
+        "type": { "enum": ["string", "integer", "number", "boolean", "datetime", "enum", "json"] },
+        "required": { "type": "boolean" },
+        "normalize": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op"],
+            "properties": {
+              "op": { "enum": ["trim", "uppercase", "lowercase", "map"] },
+              "values": { "type": "object", "additionalProperties": { "type": "string" } }
+            }
+          }
+        },
+        "datetime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["formats"],
+          "properties": {
+            "formats": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "timezone": { "enum": ["preserve", "utc", "local"] }
+          }
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible": { "type": "boolean" },
+            "width": { "type": "integer", "minimum": 48 },
+            "grow": { "type": "boolean" },
+            "align": { "enum": ["left", "center", "right"] },
+            "copyable": { "type": "boolean" }
+          }
+        },
+        "filter": { "$ref": "#/$defs/filter" }
+      }
+    },
+    "filter": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "none" } } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "text" },
+            "defaultOperator": { "const": "contains" },
+            "allowRegex": { "type": "boolean" },
+            "caseSensitiveDefault": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "number-range" },
+            "inclusiveMin": { "type": "boolean" },
+            "inclusiveMax": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "datetime-range" },
+            "inclusiveStart": { "type": "boolean" },
+            "inclusiveEnd": { "type": "boolean" },
+            "timezoneSelectable": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selection"],
+          "properties": {
+            "kind": { "const": "select" },
+            "selection": { "enum": ["single", "multiple"] },
+            "searchable": { "type": "boolean" },
+            "options": { "type": "array", "items": { "type": "string" } },
+            "optionsSource": { "const": "distinct-values" },
+            "combine": { "const": "or" }
+          },
+          "anyOf": [
+            { "required": ["options"] },
+            { "required": ["optionsSource"] }
+          ]
+        }
+      ]
+    }
+  }
+}

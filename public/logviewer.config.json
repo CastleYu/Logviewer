@@ -1,0 +1,155 @@
+{
+  "$schema": "./logviewer.config.schema.json",
+  "contractVersion": "1.0",
+  "defaultFormat": "builtin-standard-bracket-v1",
+  "formats": [
+    {
+      "id": "json-lines-generic-v1",
+      "name": "JSON Lines 通用格式",
+      "enabled": true,
+      "match": {
+        "filePatterns": ["*.jsonl", "*.ndjson"],
+        "priority": 80
+      },
+      "record": {
+        "mode": "line",
+        "encoding": "utf-8",
+        "skipEmpty": true
+      },
+      "parsers": [
+        {
+          "id": "json-line",
+          "kind": "json",
+          "bindings": {
+            "timestamp": "$.time",
+            "level": "$.level",
+            "message": "$.message",
+            "requestId": "$.context.requestId",
+            "durationMs": "$.durationMs",
+            "service": "$.service",
+            "sourceLine": "$.source.line"
+          }
+        }
+      ],
+      "onParseFailure": {
+        "action": "reject",
+        "messageField": "message"
+      },
+      "fields": [
+        {
+          "id": "timestamp",
+          "label": "时间戳",
+          "role": "timestamp",
+          "type": "datetime",
+          "required": true,
+          "normalize": [{ "op": "trim" }],
+          "datetime": {
+            "formats": ["ISO-8601"],
+            "timezone": "preserve"
+          },
+          "display": { "visible": true, "width": 190 },
+          "filter": {
+            "kind": "datetime-range",
+            "inclusiveStart": true,
+            "inclusiveEnd": true,
+            "timezoneSelectable": true
+          }
+        },
+        {
+          "id": "level",
+          "label": "级别",
+          "role": "level",
+          "type": "enum",
+          "required": true,
+          "normalize": [
+            { "op": "trim" },
+            { "op": "uppercase" },
+            { "op": "map", "values": { "WARNING": "WARN", "ERR": "ERROR" } }
+          ],
+          "display": { "visible": true, "width": 88, "align": "center" },
+          "filter": {
+            "kind": "select",
+            "selection": "multiple",
+            "searchable": false,
+            "options": ["DEBUG", "INFO", "WARN", "ERROR"],
+            "combine": "or"
+          }
+        },
+        {
+          "id": "message",
+          "label": "消息",
+          "role": "message",
+          "type": "string",
+          "required": true,
+          "display": { "visible": true, "width": 480, "grow": true },
+          "filter": {
+            "kind": "text",
+            "defaultOperator": "contains",
+            "allowRegex": true,
+            "caseSensitiveDefault": false
+          }
+        },
+        {
+          "id": "requestId",
+          "label": "请求ID",
+          "role": "request-id",
+          "type": "string",
+          "display": { "visible": true, "width": 150 },
+          "filter": {
+            "kind": "text",
+            "defaultOperator": "contains",
+            "allowRegex": true,
+            "caseSensitiveDefault": false
+          }
+        },
+        {
+          "id": "durationMs",
+          "label": "耗时(ms)",
+          "type": "number",
+          "display": { "visible": true, "width": 100, "align": "right" },
+          "filter": {
+            "kind": "number-range",
+            "inclusiveMin": true,
+            "inclusiveMax": true
+          }
+        },
+        {
+          "id": "service",
+          "label": "服务",
+          "role": "module",
+          "type": "string",
+          "display": { "visible": true, "width": 150 },
+          "filter": {
+            "kind": "select",
+            "selection": "single",
+            "searchable": true,
+            "optionsSource": "distinct-values"
+          }
+        },
+        {
+          "id": "sourceLine",
+          "label": "行号",
+          "role": "source-line",
+          "type": "integer",
+          "display": { "visible": true, "width": 72, "align": "right" },
+          "filter": { "kind": "none" }
+        }
+      ],
+      "tests": [
+        {
+          "name": "标准 JSON 记录",
+          "input": "{\"time\":\"2026-08-30T09:00:00.123Z\",\"level\":\"warning\",\"message\":\"request completed\",\"context\":{\"requestId\":\"REQ-42\"},\"durationMs\":125.5,\"service\":\"gateway\",\"source\":{\"line\":88}}",
+          "expect": {
+            "parser": "json-line",
+            "fields": {
+              "level": "WARN",
+              "requestId": "REQ-42",
+              "durationMs": 125.5,
+              "sourceLine": 88
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

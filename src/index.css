@@ -73,6 +73,14 @@
   color: inherit;
 }
 
+.date-time-input {
+  color-scheme: light;
+}
+
+.dark .date-time-input {
+  color-scheme: dark;
+}
+
 /* Floating copy toast upward fade-out animation */
 @keyframes floatUpAndFade {
   0% {

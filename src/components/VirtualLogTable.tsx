@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
-import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity } from '../types';
+import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity, ColumnFilterKey, FilterValue, LogLevel } from '../types';
 import { HighlightedText } from './HighlightedText';
+import { ColumnFilterPopover } from './ColumnFilterPopover';
+import { isNumericFilterActive, isTextFilterActive } from '../utils/columnFilterUtils';
 import { 
   AlertOctagon, 
   Terminal, 
@@ -10,13 +12,9 @@ import {
   MessageSquare, 
   Code2, 
   FileCode2,
-  Filter,
-  Clock,
-  X,
-  ArrowRightLeft,
-  RotateCcw,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Filter
 } from 'lucide-react';
 
 interface VirtualLogTableProps {
@@ -30,8 +28,7 @@ interface VirtualLogTableProps {
   highlightIsRegex?: boolean;
   matchCase?: boolean;
   wordWrap?: boolean;
-  filter?: FilterOptions;
-  onFilterChange?: (updated: Partial<FilterOptions>) => void;
+  filter: FilterOptions;
   activeSearchLogId?: number | null;
   searchKeyword?: string;
   searchMatchCase?: boolean;
@@ -39,13 +36,17 @@ interface VirtualLogTableProps {
   // 自定义列宽与主题配置
   columnWidths?: ColumnWidths;
   onColumnWidthsChange?: (widths: ColumnWidths) => void;
-  theme?: ThemeMode;
+  theme: ThemeMode;
   borderIntensity?: BorderIntensity;
   jumpToLine?: { line: number; timestamp: number } | null;
   targetNavLog?: { id: number; timestamp: number } | null;
   onFirstVisibleIndexChange?: (index: number) => void;
   legacyBoldSelection?: boolean;
   legacyHighlightStyle?: boolean;
+  onFilterChange: (updated: Partial<FilterOptions>) => void;
+  uniqueModules: string[];
+  uniqueThreads: string[];
+  timeRange: [number, number] | null;
 }
 
 interface ContextMenuState {
@@ -82,6 +83,57 @@ const minColumnWidths: Record<keyof ColumnWidths, number> = {
   lineNumber: 48,
 };
 
+interface HeaderFilterButtonProps {
+  label: string;
+  active: boolean;
+  isLight: boolean;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}
+
+function HeaderFilterButton({ label, active, isLight, onClick }: HeaderFilterButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`筛选${label}`}
+      aria-pressed={active}
+      title={`筛选${label}`}
+      className={`relative z-10 mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+        active
+          ? isLight ? 'bg-indigo-100 text-indigo-700' : 'bg-indigo-500/20 text-indigo-300'
+          : isLight ? 'text-slate-400 hover:bg-slate-200 hover:text-slate-700' : 'text-slate-500 hover:bg-slate-800 hover:text-slate-200'
+      }`}
+    >
+      <Filter className="w-3 h-3" />
+      {active ? <span className="absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-indigo-500" /> : null}
+    </button>
+  );
+}
+
+function filterOptions(column: ColumnFilterKey, modules: string[], threads: string[]): string[] {
+  if (column === ColumnFilterKey.Level) {
+    return [LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, FilterValue.FailedOnly];
+  }
+  if (column === ColumnFilterKey.Module) return modules;
+  if (column === ColumnFilterKey.ThreadId) return threads;
+  return [];
+}
+
+function isFilterActive(column: ColumnFilterKey, filter: FilterOptions): boolean {
+  switch (column) {
+    case ColumnFilterKey.Index: return isNumericFilterActive(filter.columnFilters.index);
+    case ColumnFilterKey.Timestamp: return Boolean(filter.startTime || filter.endTime);
+    case ColumnFilterKey.Level: return filter.selectedLevels.some((value) => value !== FilterValue.All);
+    case ColumnFilterKey.Module: return filter.selectedModule !== FilterValue.All;
+    case ColumnFilterKey.ThreadId: return filter.selectedThread !== FilterValue.All;
+    case ColumnFilterKey.RequestId: return isTextFilterActive(filter.columnFilters.requestId);
+    case ColumnFilterKey.OperationDesc: return isTextFilterActive(filter.columnFilters.operationDesc);
+    case ColumnFilterKey.FunctionName: return isTextFilterActive(filter.columnFilters.functionName);
+    case ColumnFilterKey.MemoryAddress: return isTextFilterActive(filter.columnFilters.memoryAddress);
+    case ColumnFilterKey.FileName: return isTextFilterActive(filter.columnFilters.fileName);
+  }
+}
+
 export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   logs,
   density,
@@ -94,36 +146,35 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   matchCase = false,
   wordWrap = true,
   filter,
-  onFilterChange,
   activeSearchLogId,
   searchKeyword,
   searchMatchCase = false,
   searchIsRegex = false,
   columnWidths = defaultWidths,
   onColumnWidthsChange,
-  theme = 'dark',
+  theme,
   borderIntensity = 'medium',
   jumpToLine,
   targetNavLog,
   onFirstVisibleIndexChange,
   legacyBoldSelection = false,
   legacyHighlightStyle = false,
+  onFilterChange,
+  uniqueModules,
+  uniqueThreads,
+  timeRange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const timeFilterBtnRef = useRef<HTMLButtonElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
   const [containerWidth, setContainerWidth] = useState(1000);
-  const [showTimePopover, setShowTimePopover] = useState(false);
-  const [timePopoverPos, setTimePopoverPos] = useState<{ top: number; left: number } | null>(null);
-  const [tempStartTime, setTempStartTime] = useState('');
-  const [tempEndTime, setTempEndTime] = useState('');
-  const [tempIsUtcOffset, setTempIsUtcOffset] = useState(false);
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const [lastSelectedLogId, setLastSelectedLogId] = useState<number | null>(null);
   const [highlightedLogId, setHighlightedLogId] = useState<number | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [openColumnFilter, setOpenColumnFilter] = useState<ColumnFilterKey | null>(null);
+  const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
 
   const triggerRowHighlight = useCallback((logId: number) => {
     setHighlightedLogId(logId);
@@ -133,27 +184,23 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     return () => clearTimeout(timer);
   }, []);
 
-  const handleToggleTimePopover = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!showTimePopover && timeFilterBtnRef.current) {
-      const rect = timeFilterBtnRef.current.getBoundingClientRect();
-      const popoverWidth = 320;
-      let left = rect.left;
-      if (left + popoverWidth > window.innerWidth - 16) {
-        left = window.innerWidth - popoverWidth - 16;
-      }
-      if (left < 16) left = 16;
-      setTimePopoverPos({ top: rect.bottom + 6, left });
-      setTempStartTime(filter?.startTime || '');
-      setTempEndTime(filter?.endTime || '');
-      setTempIsUtcOffset(filter?.isUtcOffset || false);
-      setShowTimePopover(true);
-    } else {
-      setShowTimePopover(false);
-    }
-  };
-
   const isLight = theme === 'light';
+
+  const toggleColumnFilter = useCallback((column: ColumnFilterKey, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (openColumnFilter === column) {
+      setOpenColumnFilter(null);
+      setFilterAnchor(null);
+      return;
+    }
+    setFilterAnchor(event.currentTarget.getBoundingClientRect());
+    setOpenColumnFilter(column);
+  }, [openColumnFilter]);
+
+  const closeColumnFilter = useCallback(() => {
+    setOpenColumnFilter(null);
+    setFilterAnchor(null);
+  }, []);
 
   // 右键上下文菜单状态
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -589,6 +636,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     setScrollTop(curTop);
     updateAnchor(curTop);
     if (contextMenu) setContextMenu(null);
+    if (openColumnFilter) closeColumnFilter();
   };
 
   const copyText = (text: string, key: string, toastTip?: string, e?: React.MouseEvent | null) => {
@@ -615,13 +663,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   useEffect(() => {
     const handleGlobalClick = () => {
       if (contextMenu) setContextMenu(null);
-      if (showTimePopover) setShowTimePopover(false);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (contextMenu) setContextMenu(null);
-        if (showTimePopover) setShowTimePopover(false);
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
         const selection = window.getSelection();
@@ -1162,9 +1208,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.index && (
                 <div 
                   style={{ width: `${colWidths.index}px` }} 
-                  className={`shrink-0 px-2 py-1.5 text-center border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Index, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>#</span>
+                  <HeaderFilterButton label="序号" active={isFilterActive(ColumnFilterKey.Index, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.Index, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('index', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('index', e)}
@@ -1178,21 +1225,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.timestamp && (
                 <div 
                   style={{ width: `${colWidths.timestamp}px` }} 
-                  className={`shrink-0 px-2 py-1 flex items-center justify-between border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Timestamp, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>时间戳</span>
-                  <button
-                    ref={timeFilterBtnRef}
-                    onClick={handleToggleTimePopover}
-                    className={`p-1 rounded transition-all cursor-pointer ${
-                      filter?.startTime || filter?.endTime
-                        ? 'bg-cyan-500/20 text-cyan-500 border border-cyan-500/50'
-                        : isLight ? 'text-slate-400 hover:text-slate-700 hover:bg-slate-200' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-                    }`}
-                    title="点击打开时间筛选"
-                  >
-                    <Filter className="w-3 h-3" />
-                  </button>
+                  <HeaderFilterButton label="时间戳" active={isFilterActive(ColumnFilterKey.Timestamp, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.Timestamp, event)} />
 
                   <div
                     onMouseDown={(e) => handleResizeStart('timestamp', e)}
@@ -1200,127 +1236,6 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                     className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize hover:bg-indigo-500/40 active:bg-indigo-600/60 z-20 transition-colors"
                     title="拖拽调整列宽，双击恢复默认"
                   />
-
-                  {/* 时间戳列专用浮动筛选组件 */}
-                  {showTimePopover && timePopoverPos && filter && onFilterChange && (
-                    <div
-                      style={{ top: `${timePopoverPos.top}px`, left: `${timePopoverPos.left}px` }}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`fixed w-80 rounded-lg shadow-2xl p-3 z-[9990] font-sans font-normal text-xs animate-in fade-in zoom-in-95 duration-100 border ${
-                        isLight ? 'bg-white border-slate-300 text-slate-800 shadow-slate-400/20' : 'bg-slate-900 border-slate-700 text-slate-200 shadow-black/80'
-                      }`}
-                    >
-                      <div className={`flex items-center justify-between mb-2 pb-1.5 border-b ${isLight ? 'border-slate-200' : 'border-slate-800'}`}>
-                        <div className="flex items-center gap-1.5 font-semibold text-cyan-600 dark:text-cyan-400">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>时间戳范围筛选</span>
-                        </div>
-                        <button
-                          onClick={() => setShowTimePopover(false)}
-                          className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <div className="mb-2.5">
-                        <label className={`text-[11px] block mb-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>快捷指定日期：</label>
-                        <input
-                          type="date"
-                          value={tempStartTime ? tempStartTime.split('T')[0] : ''}
-                          onChange={(e) => {
-                            const dateStr = e.target.value;
-                            if (!dateStr) {
-                              setTempStartTime('');
-                              setTempEndTime('');
-                            } else {
-                              setTempStartTime(`${dateStr}T00:00:00.000`);
-                              setTempEndTime(`${dateStr}T23:59:59.999`);
-                            }
-                          }}
-                          className={`w-full border rounded px-2 py-1 text-xs font-mono outline-none ${
-                            isLight ? 'bg-slate-50 border-slate-300 text-cyan-900 focus:border-cyan-500' : 'bg-slate-950 border-slate-700 text-cyan-200 focus:border-cyan-500'
-                          }`}
-                        />
-                      </div>
-
-                      <div className="space-y-2 mb-2.5">
-                        <div>
-                          <label className={`text-[11px] block mb-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>起始时间 (含毫秒)：</label>
-                          <input
-                            type="datetime-local"
-                            step="0.001"
-                            value={tempStartTime}
-                            onChange={(e) => setTempStartTime(e.target.value)}
-                            className={`w-full border rounded px-2 py-1 text-xs font-mono outline-none ${
-                              isLight ? 'bg-slate-50 border-slate-300 text-cyan-900 focus:border-cyan-500' : 'bg-slate-950 border-slate-700 text-cyan-200 focus:border-cyan-500'
-                            }`}
-                            placeholder="起始时间"
-                          />
-                        </div>
-                        <div>
-                          <label className={`text-[11px] block mb-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>结束时间 (含毫秒)：</label>
-                          <input
-                            type="datetime-local"
-                            step="0.001"
-                            value={tempEndTime}
-                            onChange={(e) => setTempEndTime(e.target.value)}
-                            className={`w-full border rounded px-2 py-1 text-xs font-mono outline-none ${
-                              isLight ? 'bg-slate-50 border-slate-300 text-cyan-900 focus:border-cyan-500' : 'bg-slate-950 border-slate-700 text-cyan-200 focus:border-cyan-500'
-                            }`}
-                            placeholder="结束时间"
-                          />
-                        </div>
-                      </div>
-
-                      <div className={`mb-3 pt-2 border-t flex items-center justify-between ${isLight ? 'border-slate-200' : 'border-slate-800'}`}>
-                        <span className={`text-[11px] ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>UTC 时区转换:</span>
-                        <button
-                          onClick={() => setTempIsUtcOffset(!tempIsUtcOffset)}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
-                            tempIsUtcOffset
-                              ? 'bg-cyan-600 text-white border-cyan-500 font-bold'
-                              : isLight ? 'bg-slate-100 text-slate-600 border-slate-300' : 'bg-slate-950 text-slate-400 border-slate-800'
-                          }`}
-                        >
-                          <ArrowRightLeft className="w-3 h-3" />
-                          <span>{tempIsUtcOffset ? 'UTC (+8h 转换)' : '原始时间'}</span>
-                        </button>
-                      </div>
-
-                      <div className={`flex items-center justify-between pt-2 border-t ${isLight ? 'border-slate-200' : 'border-slate-800'}`}>
-                        {(tempStartTime || tempEndTime || filter.startTime || filter.endTime) ? (
-                          <button
-                            onClick={() => {
-                              setTempStartTime('');
-                              setTempEndTime('');
-                              onFilterChange({ startTime: '', endTime: '' });
-                              setShowTimePopover(false);
-                            }}
-                            className="text-[11px] text-rose-500 hover:text-rose-600 cursor-pointer underline flex items-center gap-1"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            清空筛选
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-slate-400">未设置时间限制</span>
-                        )}
-                        <button
-                          onClick={() => {
-                            onFilterChange({
-                              startTime: tempStartTime,
-                              endTime: tempEndTime,
-                              isUtcOffset: tempIsUtcOffset,
-                            });
-                            setShowTimePopover(false);
-                          }}
-                          className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold rounded text-xs cursor-pointer shadow-2xs transition-all"
-                        >
-                          确定筛选
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1328,9 +1243,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.level && (
                 <div 
                   style={{ width: `${colWidths.level}px` }} 
-                  className={`shrink-0 px-2 py-1.5 text-center border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Level, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>级别</span>
+                  <HeaderFilterButton label="级别" active={isFilterActive(ColumnFilterKey.Level, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.Level, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('level', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('level', e)}
@@ -1344,9 +1260,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.requestId && (
                 <div 
                   style={{ width: `${colWidths.requestId}px` }} 
-                  className={`shrink-0 px-2 py-1.5 border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.RequestId, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>请求ID</span>
+                  <HeaderFilterButton label="请求ID" active={isFilterActive(ColumnFilterKey.RequestId, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.RequestId, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('requestId', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('requestId', e)}
@@ -1360,9 +1277,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.operationDesc && (
                 <div 
                   style={{ minWidth: `${colWidths.operationDesc}px` }} 
-                  className={`flex-1 shrink-0 px-2.5 py-1.5 border-r relative group ${borderClass}`}
+                  className={`flex-1 shrink-0 pl-2.5 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.OperationDesc, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>操作描述 (Operation Description)</span>
+                  <HeaderFilterButton label="操作描述" active={isFilterActive(ColumnFilterKey.OperationDesc, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.OperationDesc, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('operationDesc', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('operationDesc', e)}
@@ -1376,10 +1294,13 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.functionName && (
                 <div 
                   style={{ width: `${colWidths.functionName}px` }} 
-                  className={`shrink-0 px-2 py-1.5 border-r flex items-center justify-between relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 border-r flex items-center justify-between relative group ${isFilterActive(ColumnFilterKey.FunctionName, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>函数名</span>
-                  <span className="text-[9px] text-slate-400 font-normal">可复制</span>
+                  <div className="flex items-center gap-1 min-w-0">
+                    <span className="text-[9px] text-slate-400 font-normal truncate">可复制</span>
+                    <HeaderFilterButton label="函数名" active={isFilterActive(ColumnFilterKey.FunctionName, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.FunctionName, event)} />
+                  </div>
                   <div
                     onMouseDown={(e) => handleResizeStart('functionName', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('functionName', e)}
@@ -1393,9 +1314,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.threadId && (
                 <div 
                   style={{ width: `${colWidths.threadId}px` }} 
-                  className={`shrink-0 px-2 py-1.5 text-center border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.ThreadId, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>线程ID</span>
+                  <HeaderFilterButton label="线程ID" active={isFilterActive(ColumnFilterKey.ThreadId, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.ThreadId, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('threadId', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('threadId', e)}
@@ -1409,9 +1331,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.memoryAddress && (
                 <div 
                   style={{ width: `${colWidths.memoryAddress}px` }} 
-                  className={`shrink-0 px-2 py-1.5 border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.MemoryAddress, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>内存地址</span>
+                  <HeaderFilterButton label="内存地址" active={isFilterActive(ColumnFilterKey.MemoryAddress, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.MemoryAddress, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('memoryAddress', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('memoryAddress', e)}
@@ -1425,9 +1348,10 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.module && (
                 <div 
                   style={{ width: `${colWidths.module}px` }} 
-                  className={`shrink-0 px-2 py-1.5 border-r relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Module, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>模块</span>
+                  <HeaderFilterButton label="模块" active={isFilterActive(ColumnFilterKey.Module, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.Module, event)} />
                   <div
                     onMouseDown={(e) => handleResizeStart('module', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('module', e)}
@@ -1441,10 +1365,13 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {columnVisibility.fileName && (
                 <div 
                   style={{ width: `${colWidths.fileName}px` }} 
-                  className={`shrink-0 px-2 py-1.5 border-r flex items-center justify-between relative group ${borderClass}`}
+                  className={`shrink-0 pl-2 py-1 border-r flex items-center justify-between relative group ${isFilterActive(ColumnFilterKey.FileName, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>文件名</span>
-                  <span className="text-[9px] text-slate-400 font-normal">复制 file:lino</span>
+                  <div className="flex items-center gap-1 min-w-0">
+                    <span className="text-[9px] text-slate-400 font-normal truncate">复制 file:lino</span>
+                    <HeaderFilterButton label="文件名" active={isFilterActive(ColumnFilterKey.FileName, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.FileName, event)} />
+                  </div>
                   <div
                     onMouseDown={(e) => handleResizeStart('fileName', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('fileName', e)}
@@ -1817,6 +1744,19 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
           <span>{toast.text}</span>
         </div>
       ))}
+
+      {openColumnFilter && filterAnchor ? (
+        <ColumnFilterPopover
+          column={openColumnFilter}
+          anchor={filterAnchor}
+          filter={filter}
+          options={filterOptions(openColumnFilter, uniqueModules, uniqueThreads)}
+          timeRange={timeRange}
+          theme={theme}
+          onFilterChange={onFilterChange}
+          onClose={closeColumnFilter}
+        />
+      ) : null}
     </div>
   );
 };

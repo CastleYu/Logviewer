@@ -1,5 +1,6 @@
 import React from 'react';
 import { LogStats, ThemeMode } from '../types';
+import { ConfigError, LogFormatConfig } from '../config/logFormatTypes';
 import { formatFileSize } from '../utils/logParser';
 import { 
   FileText, 
@@ -12,7 +13,8 @@ import {
   Trash2, 
   Cpu,
   Sun,
-  Moon
+  Moon,
+  Braces
 } from 'lucide-react';
 
 interface HeaderDashboardProps {
@@ -23,6 +25,10 @@ interface HeaderDashboardProps {
   isLoading: boolean;
   theme?: ThemeMode;
   onToggleTheme?: () => void;
+  formats: LogFormatConfig[];
+  selectedFormatId: string;
+  configErrors: ConfigError[];
+  onFormatChange: (formatId: string) => void;
 }
 
 export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
@@ -33,6 +39,10 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
   isLoading,
   theme = 'dark',
   onToggleTheme,
+  formats,
+  selectedFormatId,
+  configErrors,
+  onFormatChange,
 }) => {
   const isLight = theme === 'light';
 
@@ -62,6 +72,23 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
               </span>
             </h1>
           </div>
+
+          <label className={`h-6 flex items-center gap-1 rounded-md border px-1.5 ${
+            isLight ? 'bg-slate-50 border-slate-300 text-slate-700' : 'bg-slate-900 border-slate-700 text-slate-300'
+          }`} title={configErrors.length > 0 ? configErrors.map((error) => `${error.code}: ${error.message}`).join('\n') : '选择日志格式'}>
+            <Braces className={`w-3.5 h-3.5 shrink-0 ${configErrors.length > 0 ? 'text-amber-500' : 'text-indigo-500'}`} />
+            <span className="sr-only">日志格式</span>
+            <select
+              value={selectedFormatId}
+              onChange={(event) => onFormatChange(event.target.value)}
+              disabled={isLoading}
+              className="max-w-[220px] bg-transparent border-none outline-none text-[10px] font-mono cursor-pointer disabled:cursor-not-allowed"
+              aria-label="日志格式"
+            >
+              {formats.map((format) => <option key={format.id} value={format.id}>{format.name}</option>)}
+            </select>
+            {configErrors.length > 0 ? <span className="min-w-4 h-4 px-1 flex items-center justify-center rounded bg-amber-500 text-white text-[9px] font-bold">{configErrors.length}</span> : null}
+          </label>
 
           {stats && (
             <div className={`hidden lg:flex items-center gap-2.5 text-[11px] font-mono border-l pl-3 ${

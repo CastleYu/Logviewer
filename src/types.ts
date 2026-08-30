@@ -2,6 +2,8 @@
  * Types for LogViewer Pro
  */
 
+import type { RuntimeFieldFilters } from './config/logFormatTypes';
+
 export interface ParsedLogFields {
   timestamp: string;      // 1. 时间戳
   level: string;          // 2. 日志级别 (INFO, WARN, ERROR, etc.)
@@ -13,6 +15,7 @@ export interface ParsedLogFields {
   module: string;         // 8. 模块
   fileName: string;       // 9. 文件名
   lineNumber: string;     // 10. 行号
+  [key: string]: unknown;
 }
 
 export interface LogEntry {
@@ -22,6 +25,7 @@ export interface LogEntry {
   fields?: ParsedLogFields;       // 解析成功的字段集合
   rawText: string;                // 原始单行文本
   parseErrorReason?: string;      // 解析失败原因（如括号不匹配、字段数不足）
+  parserId?: string;
 }
 
 export interface LogStats {
@@ -40,6 +44,51 @@ export interface PinnedHighlight {
   color: string;                  // 'purple' | 'amber' | 'emerald' | 'cyan' | 'rose' | 'indigo'
   matchCase?: boolean;
   isRegex?: boolean;
+}
+
+export enum ColumnFilterKey {
+  Index = 'index',
+  Timestamp = 'timestamp',
+  Level = 'level',
+  RequestId = 'requestId',
+  OperationDesc = 'operationDesc',
+  FunctionName = 'functionName',
+  ThreadId = 'threadId',
+  MemoryAddress = 'memoryAddress',
+  Module = 'module',
+  FileName = 'fileName',
+}
+
+export enum FilterValue {
+  All = 'ALL',
+  FailedOnly = 'FAILED_ONLY',
+}
+
+export enum LogLevel {
+  Debug = 'DEBUG',
+  Info = 'INFO',
+  Warn = 'WARN',
+  Error = 'ERROR',
+}
+
+export interface TextColumnFilter {
+  value: string;
+  matchCase: boolean;
+  isRegex: boolean;
+}
+
+export interface NumericColumnFilter {
+  min: string;
+  max: string;
+}
+
+export interface ColumnFilterState {
+  index: NumericColumnFilter;
+  requestId: TextColumnFilter;
+  operationDesc: TextColumnFilter;
+  functionName: TextColumnFilter;
+  memoryAddress: TextColumnFilter;
+  fileName: TextColumnFilter;
 }
 
 export interface FilterOptions {
@@ -66,6 +115,8 @@ export interface FilterOptions {
   pinnedHighlights?: PinnedHighlight[]; // 已固定的多高亮规则列表
   // 5. 自动换行开关
   wordWrap: boolean;
+  columnFilters: ColumnFilterState;
+  configuredFilters: RuntimeFieldFilters;
 }
 
 export type DisplayDensity = 'compact' | 'normal' | 'relaxed';

@@ -1,0 +1,3 @@
+{"time":"2026-08-30T09:00:00.123Z","level":"info","message":"request completed","context":{"requestId":"REQ-1"},"durationMs":80,"service":"gateway","source":{"line":10}}
+{"time":"2026-08-30T09:01:00.123Z","level":"warning","message":"slow request","context":{"requestId":"REQ-2"},"durationMs":180,"service":"billing","source":{"line":20}}
+{"time":"2026-08-30T09:02:00.123Z","level":"error","message":"request failed","context":{"requestId":"REQ-3"},"durationMs":250,"service":"gateway","source":{"line":30}}

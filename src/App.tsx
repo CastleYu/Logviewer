@@ -3,11 +3,18 @@ import { LogEntry, LogStats, FilterOptions, DisplayDensity, ColumnVisibility, Th
 import { parseLogContent } from './utils/logParser';
 import { generateSampleLogsText } from './utils/sampleData';
 import { parseLogTimestampToMs, parseInputTimeToMs } from './utils/dateUtils';
+import { createColumnFilters, matchColumnFilters } from './utils/columnFilterUtils';
+import { createBuiltinLogFormat } from './config/defaultLogFormat';
+import { BuiltinFormatId, ConfigError, LogFormatConfig } from './config/logFormatTypes';
+import { loadLogViewerConfig } from './utils/logConfigLoader';
+import { parseConfiguredLogContent } from './utils/configurableLogParser';
+import { clearConfiguredFilter, configuredFilterSummaries, createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
 import { HeaderDashboard } from './components/HeaderDashboard';
 import { Toolbar } from './components/Toolbar';
 import { VirtualLogTable } from './components/VirtualLogTable';
 import { DropZone } from './components/DropZone';
 import { FloatingErrorNav } from './components/FloatingErrorNav';
+import { ConfigurableLogTable } from './components/ConfigurableLogTable';
 import { Upload } from 'lucide-react';
 
 const defaultColumnWidths: ColumnWidths = {
@@ -24,7 +31,53 @@ const defaultColumnWidths: ColumnWidths = {
   lineNumber: 64,
 };
 
+interface LoadedSource {
+  content: string;
+  fileName: string;
+  fileSize: number;
+}
+
+function createFilterOptions(format: LogFormatConfig): FilterOptions {
+  return {
+    level: 'ALL',
+    selectedLevels: [],
+    searchKeyword: '',
+    searchColumn: 'ALL',
+    searchColumns: ['ALL'],
+    isRegex: false,
+    matchCase: false,
+    selectedModule: 'ALL',
+    selectedThread: 'ALL',
+    rangeKeyword: '',
+    startTime: '',
+    endTime: '',
+    isUtcOffset: false,
+    utcOffsetHours: 8,
+    highlightKeyword: '',
+    highlightMatchCase: false,
+    highlightIsRegex: false,
+    wordWrap: true,
+    columnFilters: createColumnFilters(),
+    configuredFilters: createConfiguredFilters(format),
+  };
+}
+
+function fieldText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function csvCell(value: unknown): string {
+  return `"${fieldText(value).replace(/"/g, '""')}"`;
+}
+
 export default function App() {
+  const [formats, setFormats] = useState<LogFormatConfig[]>(() => [createBuiltinLogFormat()]);
+  const [selectedFormatId, setSelectedFormatId] = useState<string>(BuiltinFormatId.LegacyStandard);
+  const [configErrors, setConfigErrors] = useState<ConfigError[]>([]);
+  const [source, setSource] = useState<LoadedSource | null>(null);
+  const sourceRef = useRef<LoadedSource | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<LogStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -103,26 +156,12 @@ export default function App() {
   };
 
   // 1. 过滤条件状态
-  const [filter, setFilter] = useState<FilterOptions>({
-    level: 'ALL',
-    selectedLevels: [],
-    searchKeyword: '',
-    searchColumn: 'ALL',
-    searchColumns: ['ALL'],
-    isRegex: false,
-    matchCase: false,
-    selectedModule: 'ALL',
-    selectedThread: 'ALL',
-    rangeKeyword: '',
-    startTime: '',
-    endTime: '',
-    isUtcOffset: false,
-    utcOffsetHours: 8,
-    highlightKeyword: '',
-    highlightMatchCase: false,
-    highlightIsRegex: false,
-    wordWrap: true,
-  });
+  const [filter, setFilter] = useState<FilterOptions>(() => createFilterOptions(createBuiltinLogFormat()));
+
+  const selectedFormat = useMemo(
+    () => formats.find((format) => format.id === selectedFormatId) || formats[0],
+    [formats, selectedFormatId],
+  );
 
   // 2. 显示密度 (compact: 20px / normal: 24px / relaxed: 28px) (持久化存储)
   const [density, setDensity] = useState<DisplayDensity>(() => {
@@ -193,42 +232,68 @@ export default function App() {
     } catch {}
   }, [legacyHighlightStyle]);
 
-  // 核心：处理文件解析与装载
-  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number) => {
+  const parseSource = useCallback((loaded: LoadedSource, format: LogFormatConfig, delay: number = 10) => {
     setIsLoading(true);
     setSelectedIds(new Set());
-    // 使用 requestAnimationFrame / setTimeout 避免大文本解析卡死 UI
     setTimeout(() => {
-      const { logs: parsedLogs, stats: parsedStats } = parseLogContent(content, fileName, fileSize);
+      const result = format.builtin
+        ? parseLogContent(loaded.content, loaded.fileName, loaded.fileSize)
+        : parseConfiguredLogContent(loaded.content, loaded.fileName, loaded.fileSize, format);
+      const { logs: parsedLogs, stats: parsedStats } = result;
       setLogs(parsedLogs);
       setStats(parsedStats);
       setIsLoading(false);
-    }, 10);
+    }, delay);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadLogViewerConfig().then((result) => {
+      if (!active) return;
+      const defaultFormat = result.formats.find((format) => format.id === result.defaultFormat) || result.formats[0];
+      setFormats(result.formats);
+      setConfigErrors(result.errors);
+      setSelectedFormatId(defaultFormat.id);
+      setFilter(createFilterOptions(defaultFormat));
+      if (sourceRef.current) parseSource(sourceRef.current, defaultFormat);
+    });
+    return () => { active = false; };
+  }, [parseSource]);
+
+  // 核心：处理文件解析与装载
+  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number) => {
+    const loaded = { content, fileName, fileSize };
+    setSource(loaded);
+    sourceRef.current = loaded;
+    parseSource(loaded, selectedFormat);
+  }, [parseSource, selectedFormat]);
 
   // 生成并装载示例数据
   const handleLoadSample = useCallback((count: number) => {
-    setIsLoading(true);
+    const builtin = formats.find((format) => format.id === BuiltinFormatId.LegacyStandard) || formats[0];
+    const sampleText = generateSampleLogsText(count);
+    const loaded = { content: sampleText, fileName: `sample_application_${count}.log`, fileSize: sampleText.length * 2 };
+    setSelectedFormatId(builtin.id);
+    setFilter(createFilterOptions(builtin));
+    setSource(loaded);
+    sourceRef.current = loaded;
+    parseSource(loaded, builtin, 20);
+  }, [formats, parseSource]);
+
+  const handleFormatChange = useCallback((formatId: string) => {
+    const format = formats.find((item) => item.id === formatId);
+    if (!format) return;
+    setSelectedFormatId(format.id);
+    setFilter(createFilterOptions(format));
     setSelectedIds(new Set());
-    setTimeout(() => {
-      const sampleText = generateSampleLogsText(count);
-      const fakeSize = sampleText.length * 2;
-      const { logs: parsedLogs, stats: parsedStats } = parseLogContent(
-        sampleText,
-        `sample_application_${count}.log`,
-        fakeSize
-      );
-      setLogs(parsedLogs);
-      setStats(parsedStats);
-      setIsLoading(false);
-    }, 20);
-  }, []);
+    if (source) parseSource(source, format);
+  }, [formats, parseSource, source]);
 
   // 打开本地文件选择器
   const handleSelectFile = () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.log,.txt,.out,.csv,text/*';
+    input.accept = '.log,.txt,.out,.csv,.jsonl,.ndjson,application/x-ndjson,text/*';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
@@ -248,6 +313,8 @@ export default function App() {
     setLogs([]);
     setStats(null);
     setSelectedIds(new Set());
+    setSource(null);
+    sourceRef.current = null;
   };
 
   // 全局拖拽支持
@@ -299,6 +366,19 @@ export default function App() {
     return Array.from(set).sort();
   }, [logs]);
 
+  const timeRange = useMemo<[number, number] | null>(() => {
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const log of logs) {
+      if (!log.fields?.timestamp) continue;
+      const timeMs = parseLogTimestampToMs(log.fields.timestamp);
+      if (timeMs === null) continue;
+      min = Math.min(min, timeMs);
+      max = Math.max(max, timeMs);
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : null;
+  }, [logs]);
+
   // 核心过滤器计算：处理区间筛选、时间精准筛选(含UTC转换)、日志级别、模块、线程筛选 (全文搜索改为精准定位导航)
   const filteredLogs = useMemo(() => {
     if (!logs || logs.length === 0) return [];
@@ -340,7 +420,9 @@ export default function App() {
 
     // 2. 时间范围解析（精确到毫秒，支持 GMT+8 自动转换 UTC）
     const startMs = parseInputTimeToMs(startTime, isUtcOffset, utcOffsetHours);
-    const endMs = parseInputTimeToMs(endTime, isUtcOffset, utcOffsetHours);
+    const endMs = parseInputTimeToMs(endTime, isUtcOffset, utcOffsetHours, true);
+    if ((startTime && startMs === null) || (endTime && endMs === null)) return [];
+    if (startMs !== null && endMs !== null && startMs > endMs) return [];
 
     return baseLogs.filter((log) => {
       // 级别筛选 (支持多选，未选/选全部时默认为全部)
@@ -387,9 +469,15 @@ export default function App() {
         if (endMs !== null && logMs > endMs) return false;
       }
 
+      if (selectedFormat.builtin) {
+        if (!matchColumnFilters(log, filter.columnFilters)) return false;
+      } else if (!matchConfiguredFilters(log, selectedFormat, filter.configuredFilters)) {
+        return false;
+      }
+
       return true;
     });
-  }, [logs, filter]);
+  }, [logs, filter, selectedFormat]);
 
   // 计算全文搜索匹配的日志 ID 列表 (支持指定单列/多列与全文搜索，用于定位导航与条数统计)
   const searchMatchLogIds = useMemo(() => {
@@ -419,7 +507,7 @@ export default function App() {
           if (colKey === 'lineNumber') {
             val = String(log.lineNumber);
           } else if (log.success && log.fields) {
-            val = (log.fields as Record<string, string>)[colKey] || '';
+            val = fieldText(log.fields[colKey]);
           }
           if (val && regex.test(val)) {
             matched = true;
@@ -535,6 +623,24 @@ export default function App() {
 
   // 导出 CSV
   const handleExportCSV = () => {
+    if (!selectedFormat.builtin) {
+      const headers = ['Line', ...selectedFormat.fields.map((field) => field.label), 'Status', 'RawText'];
+      const rows = filteredLogs.map((log) => [
+        log.lineNumber,
+        ...selectedFormat.fields.map((field) => csvCell(log.fields?.[field.id])),
+        log.success ? 'SUCCESS' : 'FAILED',
+        csvCell(log.rawText),
+      ].join(','));
+      const csvContent = '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `log_export_${selectedFormat.id}_${Date.now()}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
     const headers = ['Line', 'Timestamp', 'Level', 'RequestID', 'OperationDescription', 'FunctionName', 'ThreadID', 'MemoryAddress', 'Module', 'FileName', 'LineNumber', 'Status', 'RawText'];
     const rows = filteredLogs.map((l) => {
       if (l.success && l.fields) {
@@ -593,6 +699,24 @@ export default function App() {
     navigator.clipboard.writeText(rawTextLines);
   };
 
+  const configuredFilterItems = useMemo(
+    () => selectedFormat.builtin ? [] : configuredFilterSummaries(selectedFormat, filter.configuredFilters),
+    [selectedFormat, filter.configuredFilters],
+  );
+  const searchableFields = useMemo(
+    () => selectedFormat.builtin ? undefined : selectedFormat.fields.map((field) => ({ key: field.id, label: field.label })),
+    [selectedFormat],
+  );
+  const handleClearConfiguredFilter = (fieldId: string) => {
+    setFilter((previous) => ({
+      ...previous,
+      configuredFilters: clearConfiguredFilter(selectedFormat, previous.configuredFilters, fieldId),
+    }));
+  };
+  const handleClearAllConfiguredFilters = () => {
+    setFilter((previous) => ({ ...previous, configuredFilters: createConfiguredFilters(selectedFormat) }));
+  };
+
   return (
     <div
       onDragOver={handleGlobalDragOver}
@@ -620,7 +744,7 @@ export default function App() {
         }`}>
           <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
           <p className={`text-sm font-medium ${theme === 'light' ? 'text-slate-800' : 'text-slate-200'}`}>正在解析日志文本...</p>
-          <p className={`text-xs font-mono mt-1 ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>扫描顶层括号匹配与 10 字段解构中</p>
+          <p className={`text-xs font-mono mt-1 ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>使用“{selectedFormat.name}”解析字段中</p>
         </div>
       )}
 
@@ -633,6 +757,10 @@ export default function App() {
         isLoading={isLoading}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        formats={formats}
+        selectedFormatId={selectedFormat.id}
+        configErrors={configErrors}
+        onFormatChange={handleFormatChange}
       />
 
       {/* 主面板内容区 */}
@@ -657,6 +785,7 @@ export default function App() {
             filteredCount={filteredLogs.length}
             uniqueModules={uniqueModules}
             uniqueThreads={uniqueThreads}
+            timeRange={timeRange}
             selectedCount={selectedIds.size}
             onCopySelected={handleCopySelected}
             onSelectAll={handleSelectAll}
@@ -678,10 +807,15 @@ export default function App() {
             onLegacyBoldSelectionChange={setLegacyBoldSelection}
             legacyHighlightStyle={legacyHighlightStyle}
             onLegacyHighlightStyleChange={setLegacyHighlightStyle}
+            showLegacyFilters={Boolean(selectedFormat.builtin)}
+            searchableFields={searchableFields}
+            configuredFilterItems={configuredFilterItems}
+            onClearConfiguredFilter={handleClearConfiguredFilter}
+            onClearAllConfiguredFilters={handleClearAllConfiguredFilters}
           />
 
-          {/* 高密度虚拟滚动表格 VirtualLogTable */}
-          <VirtualLogTable
+          {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
+          {selectedFormat.builtin ? <VirtualLogTable
             logs={filteredLogs}
             density={density}
             columnVisibility={columnVisibility}
@@ -694,6 +828,9 @@ export default function App() {
             wordWrap={filter.wordWrap}
             filter={filter}
             onFilterChange={handleFilterChange}
+            uniqueModules={uniqueModules}
+            uniqueThreads={uniqueThreads}
+            timeRange={timeRange}
             activeSearchLogId={activeSearchLogId}
             searchKeyword={filter.searchKeyword}
             searchMatchCase={filter.matchCase}
@@ -707,7 +844,21 @@ export default function App() {
             onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
             legacyBoldSelection={legacyBoldSelection}
             legacyHighlightStyle={legacyHighlightStyle}
-          />
+          /> : <ConfigurableLogTable
+            logs={filteredLogs}
+            optionLogs={logs}
+            format={selectedFormat}
+            filters={filter.configuredFilters}
+            onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
+            filter={filter}
+            density={density}
+            theme={theme}
+            selectedIds={selectedIds}
+            onSelectionChange={setSelectedIds}
+            activeSearchLogId={activeSearchLogId}
+            targetNavLog={targetNavLog}
+            onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+          />}
 
           {/* 浮动 ERROR 快捷导航控件 */}
           <FloatingErrorNav

@@ -1,85 +1,112 @@
 /**
- * 日期时间与 UTC 转换工具库
+ * 日期时间与固定 UTC 偏移转换工具。
+ *
+ * 日志时间戳默认按 UTC 解释；筛选输入则按用户选择的固定时区解释。
  */
 
-/**
- * 解析日志文本中的时间戳字符串为 Epoch 毫秒数 (ms)
- * 兼容格式：
- * - "2026-07-30 17:34:00,123" (逗号分隔毫秒)
- * - "2026-07-30 17:34:00.123"
- * - "2026-07-30T17:34:00.123Z"
- * - "2026-07-30T17:34:00"
- */
+function parseParts(value: string, endOfDay: boolean): number[] | null {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,3}))?)?)?$/,
+  );
+  if (!match) return null;
+
+  const hasTime = match[4] !== undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = hasTime ? Number(match[4]) : endOfDay ? 23 : 0;
+  const minute = hasTime ? Number(match[5]) : endOfDay ? 59 : 0;
+  const second = match[6] !== undefined ? Number(match[6]) : endOfDay ? 59 : 0;
+  const millisecond = match[7] !== undefined
+    ? Number(match[7].padEnd(3, '0'))
+    : endOfDay ? 999 : 0;
+
+  if (
+    month < 1 || month > 12 || day < 1 || day > 31 ||
+    hour > 23 || minute > 59 || second > 59
+  ) return null;
+
+  const check = new Date(0);
+  check.setUTCFullYear(year, month - 1, day);
+  check.setUTCHours(hour, minute, second, millisecond);
+  if (
+    check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 ||
+    check.getUTCDate() !== day || check.getUTCHours() !== hour ||
+    check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second ||
+    check.getUTCMilliseconds() !== millisecond
+  ) return null;
+
+  return [year, month, day, hour, minute, second, millisecond];
+}
+
+function partsToUtc(parts: number[], offsetHours: number): number {
+  const [year, month, day, hour, minute, second, millisecond] = parts;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, millisecond);
+  return date.getTime() - offsetHours * 3_600_000;
+}
+
+/** 解析日志时间戳为 Epoch 毫秒；无时区后缀时按 UTC 解释。 */
 export function parseLogTimestampToMs(tsStr: string): number | null {
-  if (!tsStr) return null;
-  
-  // 替换逗号毫秒为点毫秒 "2026-07-30 17:34:00,123" -> "2026-07-30 17:34:00.123"
-  let normalized = tsStr.trim().replace(',', '.');
-  
-  // 如果中间是空格，替换为 T 方便 Date 解析 "2026-07-30 17:34:00.123" -> "2026-07-30T17:34:00.123"
-  if (normalized.includes(' ') && !normalized.includes('T')) {
-    normalized = normalized.replace(' ', 'T');
+  if (!tsStr?.trim()) return null;
+
+  const normalized = tsStr.trim().replace(',', '.');
+  const zoneMatch = normalized.match(/(Z|([+-])(\d{2}):(\d{2}))$/);
+  const body = zoneMatch ? normalized.slice(0, -zoneMatch[1].length) : normalized;
+  const parts = parseParts(body.trim(), false);
+  if (!parts) return null;
+
+  let offsetHours = 0;
+  if (zoneMatch && zoneMatch[1] !== 'Z') {
+    const hours = Number(zoneMatch[3]);
+    const minutes = Number(zoneMatch[4]);
+    if (hours > 14 || minutes > 59 || (hours === 14 && minutes !== 0)) return null;
+    offsetHours = hours + minutes / 60;
+    if (zoneMatch[2] === '-') offsetHours *= -1;
   }
 
-  // 尝试统一补齐标准 ISO，如果结尾没有时区标识，追加 Z (视为 UTC 基础)
-  if (!normalized.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(normalized)) {
-    normalized += 'Z';
-  }
+  return partsToUtc(parts, offsetHours);
+}
 
-  const date = new Date(normalized);
-  const timeMs = date.getTime();
-  return isNaN(timeMs) ? null : timeMs;
+/** 按配置声明解释日志时间；带显式时区的值始终优先使用自身时区。 */
+export function parseConfiguredDateTime(tsStr: string, timezone: 'preserve' | 'utc' | 'local' = 'preserve'): number | null {
+  if (!tsStr?.trim()) return null;
+  const normalized = tsStr.trim().replace(',', '.');
+  if (/(Z|[+-]\d{2}:\d{2})$/.test(normalized) || timezone !== 'local') return parseLogTimestampToMs(normalized);
+  const localOffset = -new Date().getTimezoneOffset() / 60;
+  return parseInputTimeToMs(normalized, true, localOffset);
 }
 
 /**
- * 解析用户在输入框/时间选择器中输入的当地时间，并根据 UTC 偏移量转化为精确匹配毫秒数
- * @param inputStr 形如 "2026-07-30T17:34:00.123" 或 "2026-07-30 17:34:00.123"
- * @param isUtcOffset 是否启用 UTC 转换 (配置启用后，假设输入的为当前时区如 GMT+8，自动减去 offsetHours 转换为 UTC 匹配)
- * @param offsetHours 时区小时差，默认 8 (GMT+8)
+ * 将筛选输入解析为 Epoch 毫秒。
+ * 开始边界向下补零；结束边界按输入精度补满（日期到当天末、分钟到该分钟末）。
  */
 export function parseInputTimeToMs(
   inputStr: string,
   isUtcOffset: boolean,
-  offsetHours: number = 8
+  offsetHours: number = 8,
+  endOfDay: boolean = false,
 ): number | null {
-  if (!inputStr || !inputStr.trim()) return null;
+  if (!inputStr?.trim()) return null;
+  const parts = parseParts(inputStr.trim().replace(',', '.'), endOfDay);
+  if (!parts) return null;
 
-  let str = inputStr.trim().replace(',', '.');
-  if (str.includes(' ') && !str.includes('T')) {
-    str = str.replace(' ', 'T');
-  }
+  const offset = isUtcOffset && Number.isFinite(offsetHours) ? offsetHours : 0;
+  if (offset < -12 || offset > 14) return null;
+  return partsToUtc(parts, offset);
+}
 
-  // 解析数字
-  // 支持格式: 2026-07-30T17:34:00.123
-  const regex = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,3}))?)?)?$/;
-  const match = str.match(regex);
-
-  if (!match) {
-    // 退化尝试标准的 Date.parse
-    const d = new Date(str);
-    const ms = d.getTime();
-    if (isNaN(ms)) return null;
-    if (isUtcOffset) {
-      return ms - offsetHours * 3600 * 1000;
-    }
-    return ms;
-  }
-
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10) - 1;
-  const day = parseInt(match[3], 10);
-  const hour = match[4] ? parseInt(match[4], 10) : 0;
-  const minute = match[5] ? parseInt(match[5], 10) : 0;
-  const second = match[6] ? parseInt(match[6], 10) : 0;
-  let ms = match[7] ? parseInt(match[7].padEnd(3, '0'), 10) : 0;
-
-  // 使用 Date.UTC 创建基准时间
-  let utcTimestamp = Date.UTC(year, month, day, hour, minute, second, ms);
-
-  // 如果启用了 UTC 自动转换（用户输入的为 GMT+8 当地时间，对应真正的 UTC 时间要减去 8 小时）
-  if (isUtcOffset) {
-    utcTimestamp -= offsetHours * 3600 * 1000;
-  }
-
-  return utcTimestamp;
+/** 将 UTC 毫秒格式化为 datetime-local 可用的固定时区墙上时间。 */
+export function formatMsForInput(timeMs: number, offsetHours: number = 0): string {
+  if (!Number.isFinite(timeMs)) return '';
+  const date = new Date(timeMs + offsetHours * 3_600_000);
+  const year = String(date.getUTCFullYear()).padStart(4, '0');
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const hour = String(date.getUTCHours()).padStart(2, '0');
+  const minute = String(date.getUTCMinutes()).padStart(2, '0');
+  const second = String(date.getUTCSeconds()).padStart(2, '0');
+  const millisecond = String(date.getUTCMilliseconds()).padStart(3, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}`;
 }
