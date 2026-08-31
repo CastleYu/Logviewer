@@ -3,6 +3,7 @@ build/
 dist/
 coverage/
 .playwright-mcp/
+.logviewer-cache/
 .DS_Store
 *.log
 .env*

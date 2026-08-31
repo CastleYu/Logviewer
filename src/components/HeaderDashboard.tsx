@@ -14,12 +14,14 @@ import {
   Cpu,
   Sun,
   Moon,
-  Braces
+  Braces,
+  Server
 } from 'lucide-react';
 
 interface HeaderDashboardProps {
   stats: LogStats | null;
   onSelectFile: () => void;
+  onSelectRemote: () => void;
   onLoadSample: (count: number) => void;
   onClear: () => void;
   isLoading: boolean;
@@ -34,6 +36,7 @@ interface HeaderDashboardProps {
 export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
   stats,
   onSelectFile,
+  onSelectRemote,
   onLoadSample,
   onClear,
   isLoading,
@@ -61,7 +64,7 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
               <Cpu className="w-3.5 h-3.5" />
             </div>
             <h1 className={`text-xs font-bold tracking-tight flex items-center gap-1.5 ${isLight ? 'text-slate-800' : 'text-slate-100'}`}>
-              <span className="bg-gradient-to-r from-indigo-500 via-sky-400 to-indigo-400 bg-clip-text text-transparent">LogViewer</span>
+              <span className="text-indigo-600 dark:text-indigo-400">LogViewer</span>
               <span className="font-semibold text-slate-400 dark:text-slate-500">Pro</span>
               <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded-full border hidden sm:inline ${
                 isLight 
@@ -176,6 +179,20 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
             <span>打开文件</span>
           </button>
 
+          <button
+            onClick={onSelectRemote}
+            disabled={isLoading}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-45 ${
+              isLight
+                ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+                : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
+            }`}
+            title={isLoading ? '当前文件加载完成后才能打开其他文件' : '打开 SFTP 远程日志文件'}
+          >
+            <Server className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">远程文件</span>
+          </button>
+
           <div className="relative group">
             <button
               disabled={isLoading}
@@ -226,8 +243,8 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
               onClick={onClear}
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-all cursor-pointer ${
                 isLight
-                  ? 'bg-slate-100 hover:bg-rose-100/80 hover:text-rose-700 text-slate-500 border-slate-300/80'
-                  : 'bg-slate-900 hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800/50 text-slate-400 border-slate-800'
+                  ? 'bg-slate-100 hover:bg-rose-100/80 text-rose-700 border-slate-300/80'
+                  : 'bg-slate-900 hover:bg-rose-950/40 text-rose-300 hover:border-rose-800/50 border-slate-800'
               }`}
               title="清除当前日志"
             >

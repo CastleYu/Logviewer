@@ -15,6 +15,10 @@ import { VirtualLogTable } from './components/VirtualLogTable';
 import { DropZone } from './components/DropZone';
 import { FloatingErrorNav } from './components/FloatingErrorNav';
 import { ConfigurableLogTable } from './components/ConfigurableLogTable';
+import { FileLoadBar } from './components/FileLoadBar';
+import { RemoteFileDialog } from './components/RemoteFileDialog';
+import { DownloadStatus, FileLoadState, LoadPhase, LoadSourceKind, LoadState, SftpProfileView } from './config/fileLoadTypes';
+import { RemoteFileApi } from './services/remoteFileApi';
 import { Upload } from 'lucide-react';
 
 const defaultColumnWidths: ColumnWidths = {
@@ -83,6 +87,54 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [fileLoad, setFileLoad] = useState<FileLoadState>(() => LoadState.idle());
+  const fileLoadRef = useRef<FileLoadState>(LoadState.idle());
+  const loadSequenceRef = useRef(0);
+  const parseSequenceRef = useRef(0);
+  const cancelledLoadIdsRef = useRef<Set<number>>(new Set());
+  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
+  const [sftpProfiles, setSftpProfiles] = useState<SftpProfileView[]>([]);
+  const isBusy = LoadState.busy(fileLoad) || isLoading;
+
+  const publishLoad = useCallback((next: FileLoadState) => {
+    fileLoadRef.current = next;
+    setFileLoad(next);
+  }, []);
+
+  const beginLoad = useCallback((phase: LoadPhase, sourceKind: LoadSourceKind, fileName: string, totalBytes: number = 0): number | null => {
+    if (LoadState.busy(fileLoadRef.current)) return null;
+    const next: FileLoadState = {
+      id: ++loadSequenceRef.current,
+      phase,
+      source: sourceKind,
+      fileName,
+      loadedBytes: 0,
+      totalBytes,
+    };
+    publishLoad(next);
+    return next.id;
+  }, [publishLoad]);
+
+  const updateLoad = useCallback((id: number, patch: Partial<FileLoadState>) => {
+    if (fileLoadRef.current.id !== id) return;
+    publishLoad({ ...fileLoadRef.current, ...patch, id });
+  }, [publishLoad]);
+
+  const finishLoad = useCallback((id: number) => {
+    if (fileLoadRef.current.id !== id) return;
+    publishLoad(LoadState.idle());
+  }, [publishLoad]);
+
+  const failLoad = useCallback((id: number, message: string) => {
+    if (fileLoadRef.current.id !== id) return;
+    publishLoad({ ...fileLoadRef.current, phase: LoadPhase.Error, message });
+  }, [publishLoad]);
+
+  useEffect(() => {
+    RemoteFileApi.profiles()
+      .then(setSftpProfiles)
+      .catch(() => setSftpProfiles([{ id: 'default', name: '默认 SFTP 服务器', root: '/', ready: false }]));
+  }, []);
 
   // 主题模式 (dark / light) 默认使用浅色 (light)
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -232,10 +284,13 @@ export default function App() {
     } catch {}
   }, [legacyHighlightStyle]);
 
-  const parseSource = useCallback((loaded: LoadedSource, format: LogFormatConfig, delay: number = 10) => {
+  const parseSource = useCallback((loaded: LoadedSource, format: LogFormatConfig, delay: number = 10, loadId?: number) => {
+    const parseId = ++parseSequenceRef.current;
     setIsLoading(true);
     setSelectedIds(new Set());
+    if (loadId !== undefined) updateLoad(loadId, { phase: LoadPhase.Parsing, loadedBytes: loaded.fileSize, totalBytes: loaded.fileSize });
     setTimeout(() => {
+      if (parseSequenceRef.current !== parseId) return;
       const result = format.builtin
         ? parseLogContent(loaded.content, loaded.fileName, loaded.fileSize)
         : parseConfiguredLogContent(loaded.content, loaded.fileName, loaded.fileSize, format);
@@ -243,8 +298,9 @@ export default function App() {
       setLogs(parsedLogs);
       setStats(parsedStats);
       setIsLoading(false);
+      if (loadId !== undefined) finishLoad(loadId);
     }, delay);
-  }, []);
+  }, [finishLoad, updateLoad]);
 
   useEffect(() => {
     let active = true;
@@ -261,55 +317,110 @@ export default function App() {
   }, [parseSource]);
 
   // 核心：处理文件解析与装载
-  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number) => {
+  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number, loadId: number) => {
+    if (fileLoadRef.current.id !== loadId) return;
     const loaded = { content, fileName, fileSize };
     setSource(loaded);
     sourceRef.current = loaded;
-    parseSource(loaded, selectedFormat);
+    parseSource(loaded, selectedFormat, 10, loadId);
   }, [parseSource, selectedFormat]);
 
   // 生成并装载示例数据
   const handleLoadSample = useCallback((count: number) => {
+    const fileName = `sample_application_${count}.log`;
+    const loadId = beginLoad(LoadPhase.Reading, LoadSourceKind.Sample, fileName);
+    if (loadId === null) return;
     const builtin = formats.find((format) => format.id === BuiltinFormatId.LegacyStandard) || formats[0];
     const sampleText = generateSampleLogsText(count);
-    const loaded = { content: sampleText, fileName: `sample_application_${count}.log`, fileSize: sampleText.length * 2 };
+    const loaded = { content: sampleText, fileName, fileSize: new Blob([sampleText]).size };
     setSelectedFormatId(builtin.id);
     setFilter(createFilterOptions(builtin));
     setSource(loaded);
     sourceRef.current = loaded;
-    parseSource(loaded, builtin, 20);
-  }, [formats, parseSource]);
+    parseSource(loaded, builtin, 20, loadId);
+  }, [beginLoad, formats, parseSource]);
 
   const handleFormatChange = useCallback((formatId: string) => {
+    if (isBusy) return;
     const format = formats.find((item) => item.id === formatId);
     if (!format) return;
     setSelectedFormatId(format.id);
     setFilter(createFilterOptions(format));
     setSelectedIds(new Set());
-    if (source) parseSource(source, format);
-  }, [formats, parseSource, source]);
+    if (source) {
+      const loadId = beginLoad(LoadPhase.Parsing, LoadSourceKind.Reparse, source.fileName, source.fileSize);
+      if (loadId !== null) parseSource(source, format, 10, loadId);
+    }
+  }, [beginLoad, formats, isBusy, parseSource, source]);
+
+  const handleFile = useCallback((file: File) => {
+    const loadId = beginLoad(LoadPhase.Reading, LoadSourceKind.Local, file.name, file.size);
+    if (loadId === null) return;
+    const reader = new FileReader();
+    reader.onprogress = (event) => updateLoad(loadId, { loadedBytes: event.loaded, totalBytes: event.lengthComputable ? event.total : file.size });
+    reader.onerror = () => failLoad(loadId, '无法读取该本地文件，请检查文件是否仍然可用');
+    reader.onload = (event) => handleLoadContent(String(event.target?.result || ''), file.name, file.size, loadId);
+    reader.readAsText(file);
+  }, [beginLoad, failLoad, handleLoadContent, updateLoad]);
 
   // 打开本地文件选择器
   const handleSelectFile = () => {
+    if (isBusy) return;
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.log,.txt,.out,.csv,.jsonl,.ndjson,application/x-ndjson,text/*';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const content = event.target?.result as string;
-          handleLoadContent(content, file.name, file.size);
-        };
-        reader.readAsText(file);
-      }
+      if (file) handleFile(file);
     };
     input.click();
   };
 
+  const handleRemoteLoad = useCallback(async (profileId: string, remotePath: string) => {
+    const fileName = remotePath.split('/').filter(Boolean).pop() || '远程文件';
+    const loadId = beginLoad(LoadPhase.Downloading, LoadSourceKind.Remote, fileName);
+    if (loadId === null) return;
+    setRemoteDialogOpen(false);
+    try {
+      let task = await RemoteFileApi.create(profileId, remotePath);
+      if (cancelledLoadIdsRef.current.delete(loadId) || fileLoadRef.current.id !== loadId) {
+        await RemoteFileApi.cancel(task.id).catch(() => undefined);
+        return;
+      }
+      updateLoad(loadId, { taskId: task.id, fileName: task.fileName || fileName });
+      while (task.status === DownloadStatus.Queued || task.status === DownloadStatus.Downloading) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        if (fileLoadRef.current.id !== loadId) return;
+        task = await RemoteFileApi.task(task.id);
+        updateLoad(loadId, {
+          taskId: task.id,
+          fileName: task.fileName,
+          loadedBytes: task.downloadedBytes,
+          totalBytes: task.totalBytes,
+        });
+      }
+      if (task.status !== DownloadStatus.Completed) throw new Error(task.error || '远程文件下载未完成');
+      const loaded = await RemoteFileApi.content(task.id);
+      handleLoadContent(loaded.content, loaded.name, loaded.size, loadId);
+    } catch (error) {
+      failLoad(loadId, error instanceof Error ? error.message : '远程文件加载失败');
+    }
+  }, [beginLoad, failLoad, handleLoadContent, updateLoad]);
+
+  const handleCancelLoad = useCallback(() => {
+    const current = fileLoadRef.current;
+    if (current.phase !== LoadPhase.Downloading) return;
+    cancelledLoadIdsRef.current.add(current.id);
+    publishLoad(LoadState.idle());
+    if (current.taskId) {
+      cancelledLoadIdsRef.current.delete(current.id);
+      void RemoteFileApi.cancel(current.taskId).catch(() => undefined);
+    }
+  }, [publishLoad]);
+
   // 清除/重置
   const handleClear = () => {
+    if (isBusy) return;
     setLogs([]);
     setStats(null);
     setSelectedIds(new Set());
@@ -320,6 +431,7 @@ export default function App() {
   // 全局拖拽支持
   const handleGlobalDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    if (isBusy) return;
     setIsDragOver(true);
   };
 
@@ -333,14 +445,9 @@ export default function App() {
   const handleGlobalDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
+    if (isBusy) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target?.result as string;
-        handleLoadContent(content, file.name, file.size);
-      };
-      reader.readAsText(file);
+      handleFile(e.dataTransfer.files[0]);
     }
   };
 
@@ -731,20 +838,9 @@ export default function App() {
         <div className={`absolute inset-0 z-50 backdrop-blur-sm border-4 border-dashed flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-150 ${
           theme === 'light' ? 'bg-blue-100/90 border-blue-500 text-blue-900' : 'bg-blue-950/80 border-blue-400 text-blue-200'
         }`}>
-          <Upload className="w-16 h-16 mb-4 text-blue-500 animate-bounce" />
+          <Upload className="w-16 h-16 mb-4 text-blue-500" />
           <h2 className="text-2xl font-bold">释放鼠标即可立即加载解析日志文件</h2>
-          <p className="text-sm mt-2 font-mono">支持任意大小的 .log / .txt 文件</p>
-        </div>
-      )}
-
-      {/* Loading 解析中 Indicator */}
-      {isLoading && (
-        <div className={`absolute inset-0 z-40 backdrop-blur-sm flex flex-col items-center justify-center ${
-          theme === 'light' ? 'bg-white/80' : 'bg-slate-950/70'
-        }`}>
-          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
-          <p className={`text-sm font-medium ${theme === 'light' ? 'text-slate-800' : 'text-slate-200'}`}>正在解析日志文本...</p>
-          <p className={`text-xs font-mono mt-1 ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>使用“{selectedFormat.name}”解析字段中</p>
+          <p className="text-sm mt-2 font-mono">支持 .log / .txt 等文本日志</p>
         </div>
       )}
 
@@ -752,9 +848,10 @@ export default function App() {
       <HeaderDashboard
         stats={stats}
         onSelectFile={handleSelectFile}
+        onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
         onLoadSample={handleLoadSample}
         onClear={handleClear}
-        isLoading={isLoading}
+        isLoading={isBusy}
         theme={theme}
         onToggleTheme={handleToggleTheme}
         formats={formats}
@@ -763,12 +860,20 @@ export default function App() {
         onFormatChange={handleFormatChange}
       />
 
+      <FileLoadBar
+        state={fileLoad}
+        theme={theme}
+        onCancel={handleCancelLoad}
+        onDismiss={() => publishLoad(LoadState.idle())}
+      />
+
       {/* 主面板内容区 */}
       {logs.length === 0 ? (
         <DropZone
-          onFileLoaded={handleLoadContent}
+          onFileSelected={handleFile}
+          onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
           onLoadSample={handleLoadSample}
-          isLoading={isLoading}
+          isLoading={isBusy}
           theme={theme}
         />
       ) : (
@@ -870,6 +975,14 @@ export default function App() {
           />
         </div>
       )}
+      <RemoteFileDialog
+        open={remoteDialogOpen}
+        profiles={sftpProfiles}
+        busy={isBusy}
+        theme={theme}
+        onClose={() => { if (!isBusy) setRemoteDialogOpen(false); }}
+        onSubmit={handleRemoteLoad}
+      />
     </div>
   );
 }

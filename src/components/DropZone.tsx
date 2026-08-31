@@ -1,16 +1,18 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Sparkles, Code } from 'lucide-react';
+import { Upload, FileText, Sparkles, Code, Server } from 'lucide-react';
 import { ThemeMode } from '../types';
 
 interface DropZoneProps {
-  onFileLoaded: (content: string, name: string, size: number) => void;
+  onFileSelected: (file: File) => void;
+  onSelectRemote: () => void;
   onLoadSample: (count: number) => void;
   isLoading: boolean;
   theme?: ThemeMode;
 }
 
 export const DropZone: React.FC<DropZoneProps> = ({
-  onFileLoaded,
+  onFileSelected,
+  onSelectRemote,
   onLoadSample,
   isLoading,
   theme = 'dark',
@@ -19,13 +21,8 @@ export const DropZone: React.FC<DropZoneProps> = ({
   const isLight = theme === 'light';
 
   const handleFile = (file: File) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      onFileLoaded(content, file.name, file.size);
-    };
-    reader.readAsText(file);
+    if (!file || isLoading) return;
+    onFileSelected(file);
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -41,6 +38,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isLoading) return;
     setIsDragOver(true);
   };
 
@@ -100,10 +98,25 @@ export const DropZone: React.FC<DropZoneProps> = ({
             <input
               type="file"
               accept=".log,.txt,.out,.csv,text/*"
+              disabled={isLoading}
               onChange={handleFileInputChange}
               className="hidden"
             />
           </label>
+
+          <button
+            type="button"
+            onClick={onSelectRemote}
+            disabled={isLoading}
+            className={`flex items-center gap-2 px-5 py-2.5 font-semibold text-xs rounded-lg transition-all border disabled:cursor-not-allowed disabled:opacity-45 ${
+              isLight
+                ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+                : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
+            }`}
+          >
+            <Server className="w-4 h-4" />
+            打开 SFTP 文件
+          </button>
 
           <button
             onClick={() => onLoadSample(10000)}
