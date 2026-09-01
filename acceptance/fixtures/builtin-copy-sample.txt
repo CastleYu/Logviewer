@@ -1,0 +1,2 @@
+[2026-09-01 08:00:00.001][INFO][REQ-1][request ready][startServer][T-1][0x1000][Gateway][server.cpp][42]
+[2026-09-01 08:00:01.002][WARN][REQ-2][request [slow]][handleRequest][T-2][0x2000][Gateway][handler.cpp][88]

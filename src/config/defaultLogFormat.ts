@@ -1,5 +1,8 @@
 import {
   BuiltinFormatId,
+  CopyMissingPolicy,
+  CopyPartKind,
+  CopyPlacement,
   FieldFilterKind,
   FieldRole,
   FieldType,
@@ -80,11 +83,13 @@ export function createBuiltinLogFormat(): LogFormatConfig {
       {
         id: 'operationDesc', label: '操作描述', role: FieldRole.Message, type: FieldType.String, required: true,
         display: { visible: true, width: 380, grow: true },
+        copy: { enabled: true, label: '复制 Message', placements: [CopyPlacement.ContextMenu] },
         filter: { kind: FieldFilterKind.Text, defaultOperator: TextOperator.Contains, allowRegex: true, caseSensitiveDefault: false },
       },
       {
         id: 'functionName', label: '函数名', role: FieldRole.Function, type: FieldType.String,
-        display: { visible: true, width: 160, copyable: true },
+        display: { visible: true, width: 160 },
+        copy: { enabled: true, label: '复制函数名', placements: [CopyPlacement.Cell, CopyPlacement.Header, CopyPlacement.ContextMenu] },
         filter: { kind: FieldFilterKind.Text, defaultOperator: TextOperator.Contains, allowRegex: true, caseSensitiveDefault: false },
       },
       {
@@ -104,13 +109,27 @@ export function createBuiltinLogFormat(): LogFormatConfig {
       },
       {
         id: 'fileName', label: '文件名', role: FieldRole.SourceFile, type: FieldType.String,
-        display: { visible: true, width: 144, copyable: true },
+        display: { visible: true, width: 144 },
         filter: { kind: FieldFilterKind.Text, defaultOperator: TextOperator.Contains, allowRegex: true, caseSensitiveDefault: false },
       },
       {
         id: 'lineNumber', label: '行号', role: FieldRole.SourceLine, type: FieldType.Integer,
         display: { visible: true, width: 64, align: 'right' },
         filter: { kind: FieldFilterKind.None },
+      },
+    ],
+    copyActions: [
+      {
+        id: 'source-location',
+        label: '复制 文件:行号',
+        anchorField: 'fileName',
+        placements: [CopyPlacement.Cell, CopyPlacement.Header, CopyPlacement.ContextMenu],
+        parts: [
+          { kind: CopyPartKind.Field, field: 'fileName' },
+          { kind: CopyPartKind.Literal, value: ':' },
+          { kind: CopyPartKind.Field, field: 'lineNumber' },
+        ],
+        rows: { separator: '\n', missing: CopyMissingPolicy.Empty },
       },
     ],
   };

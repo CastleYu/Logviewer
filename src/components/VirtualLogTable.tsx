@@ -2,6 +2,9 @@ import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from
 import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity, ColumnFilterKey, FilterValue, LogLevel } from '../types';
 import { HighlightedText } from './HighlightedText';
 import { ColumnFilterPopover } from './ColumnFilterPopover';
+import { CopyActionPopover, HeaderCopyButton, copyActionToClipboard } from './CopyActionPopover';
+import { CopyPlacement, LogFormatConfig, RuntimeCopyAction } from '../config/logFormatTypes';
+import { copyActions, copyActionsAt } from '../utils/logCopyUtils';
 import { isNumericFilterActive, isTextFilterActive } from '../utils/columnFilterUtils';
 import { 
   AlertOctagon, 
@@ -9,9 +12,6 @@ import {
   Copy, 
   Check, 
   FileText, 
-  MessageSquare, 
-  Code2, 
-  FileCode2,
   ChevronUp,
   ChevronDown,
   Filter
@@ -19,6 +19,7 @@ import {
 
 interface VirtualLogTableProps {
   logs: LogEntry[];
+  format: LogFormatConfig;
   density: DisplayDensity;
   columnVisibility: ColumnVisibility;
   selectedIds: Set<number>;
@@ -136,6 +137,7 @@ function isFilterActive(column: ColumnFilterKey, filter: FilterOptions): boolean
 
 export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   logs,
+  format,
   density,
   columnVisibility,
   selectedIds,
@@ -171,8 +173,9 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const [lastSelectedLogId, setLastSelectedLogId] = useState<number | null>(null);
   const [highlightedLogId, setHighlightedLogId] = useState<number | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastOk, setToastOk] = useState(true);
+  const [copyTarget, setCopyTarget] = useState<{ actions: RuntimeCopyAction[]; anchor: DOMRect } | null>(null);
   const [openColumnFilter, setOpenColumnFilter] = useState<ColumnFilterKey | null>(null);
   const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
 
@@ -185,6 +188,8 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   }, []);
 
   const isLight = theme === 'light';
+  const registeredCopyActions = React.useMemo(() => copyActions(format), [format]);
+  const selectedLogs = React.useMemo(() => logs.filter((log) => selectedIds.has(log.id)), [logs, selectedIds]);
 
   const toggleColumnFilter = useCallback((column: ColumnFilterKey, event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -637,16 +642,30 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     updateAnchor(curTop);
     if (contextMenu) setContextMenu(null);
     if (openColumnFilter) closeColumnFilter();
+    if (copyTarget) setCopyTarget(null);
   };
 
-  const copyText = (text: string, key: string, toastTip?: string, e?: React.MouseEvent | null) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    const msg = toastTip || '已复制到剪贴板';
+  const copyText = async (text: string, _key: string, toastTip?: string, e?: React.MouseEvent | null) => {
+    let ok = true;
+    let msg = toastTip || '已复制到剪贴板';
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      ok = false;
+      msg = '剪贴板写入失败，请检查浏览器权限后重试';
+    }
+    setToastOk(ok);
     setToastMessage(msg);
     triggerFloatingToast(msg, e);
     setTimeout(() => setToastMessage(null), 2000);
-    setTimeout(() => setCopiedKey(null), 1500);
+  };
+
+  const runRegisteredCopy = async (action: RuntimeCopyAction, targetLogs: LogEntry[]) => {
+    const feedback = await copyActionToClipboard(action, targetLogs);
+    setToastOk(feedback.ok);
+    setToastMessage(feedback.message);
+    triggerFloatingToast(feedback.message, null);
+    setTimeout(() => setToastMessage(null), 2400);
   };
 
   const copySelectedLogsRaw = useCallback((e?: React.MouseEvent | { clientX?: number; clientY?: number } | null) => {
@@ -1042,9 +1061,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
       {/* Toast 操作成功常驻反馈 */}
       {toastMessage && (
         <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 text-xs font-sans animate-in fade-in duration-150 pointer-events-none border ${
-          isLight ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-emerald-950 border-emerald-500 text-emerald-200'
+          toastOk
+            ? isLight ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-emerald-950 border-emerald-500 text-emerald-200'
+            : isLight ? 'bg-rose-50 border-rose-400 text-rose-900' : 'bg-rose-950 border-rose-500 text-rose-200'
         }`}>
-          <Check className="w-4 h-4 text-emerald-500" />
+          {toastOk ? <Check className="w-4 h-4 text-emerald-500" /> : <AlertOctagon className="w-4 h-4 text-rose-500" />}
           <span>{toastMessage}</span>
         </div>
       )}
@@ -1111,7 +1132,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                 setContextMenu(null);
               }}
               className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between cursor-pointer ${
-                isLight ? 'hover:bg-blue-600 hover:text-white text-slate-700' : 'hover:bg-blue-600 hover:text-white text-slate-200'
+                isLight ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-800 text-slate-200'
               }`}
             >
               <div className="flex items-center gap-2">
@@ -1123,72 +1144,24 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               )}
             </button>
 
-            {/* Message 复制 */}
-            <button
-              onClick={(e) => {
-                const text = contextTargetLogs.map((l) => l.fields?.operationDesc || l.rawText).join('\n');
-                const toast = contextTargetLogs.length > 1 ? `已复制选中的 ${contextTargetLogs.length} 行 Message` : '已复制 Message';
-                copyText(text, 'ctx-msg', toast, e);
-                setContextMenu(null);
-              }}
-              className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between cursor-pointer ${
-                isLight ? 'hover:bg-blue-600 hover:text-white text-slate-700' : 'hover:bg-blue-600 hover:text-white text-slate-200'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-3.5 h-3.5 text-cyan-500" />
-                <span>message 复制</span>
-              </div>
-              {contextTargetLogs.length > 1 && (
-                <span className="text-[10px] opacity-75 font-mono">({contextTargetLogs.length}行)</span>
-              )}
-            </button>
-
-            {/* 函数名复制 (只要目标日志中有函数名就提供) */}
-            {contextTargetLogs.some((l) => l.fields?.functionName) && (
+            {copyActionsAt(registeredCopyActions, CopyPlacement.ContextMenu).map((action) => (
               <button
-                onClick={(e) => {
-                  const text = contextTargetLogs.map((l) => l.fields?.functionName || '').join('\n');
-                  const toast = contextTargetLogs.length > 1 ? `已复制选中的 ${contextTargetLogs.length} 行函数名` : `已复制函数名: ${contextTargetLogs[0].fields?.functionName || ''}`;
-                  copyText(text, 'ctx-func', toast, e);
+                key={action.id}
+                onClick={async () => {
+                  await runRegisteredCopy(action, contextTargetLogs);
                   setContextMenu(null);
                 }}
-                className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between cursor-pointer ${
-                  isLight ? 'hover:bg-blue-600 hover:text-white text-slate-700' : 'hover:bg-blue-600 hover:text-white text-slate-200'
+                className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${
+                  isLight ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-800 text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <Code2 className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>函数名复制</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <Copy className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
+                  <span className="truncate">{action.label}</span>
                 </div>
-                {contextTargetLogs.length > 1 && (
-                  <span className="text-[10px] opacity-75 font-mono">({contextTargetLogs.length}行)</span>
-                )}
+                {contextTargetLogs.length > 1 ? <span className="text-[10px] opacity-75 font-mono">({contextTargetLogs.length}行)</span> : null}
               </button>
-            )}
-
-            {/* 文件：行号复制 */}
-            {contextTargetLogs.some((l) => l.fields?.fileName) && (
-              <button
-                onClick={(e) => {
-                  const text = contextTargetLogs.map((l) => (l.fields?.fileName ? `${l.fields.fileName}:${l.fields.lineNumber}` : '')).join('\n');
-                  const toast = contextTargetLogs.length > 1 ? `已复制选中的 ${contextTargetLogs.length} 行文件:行号` : `已复制: ${contextTargetLogs[0].fields?.fileName ? `${contextTargetLogs[0].fields.fileName}:${contextTargetLogs[0].fields.lineNumber}` : ''}`;
-                  copyText(text, 'ctx-file', toast, e);
-                  setContextMenu(null);
-                }}
-                className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between cursor-pointer ${
-                  isLight ? 'hover:bg-blue-600 hover:text-white text-slate-700' : 'hover:bg-blue-600 hover:text-white text-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <FileCode2 className="w-3.5 h-3.5 text-amber-500" />
-                  <span>文件：行号复制</span>
-                </div>
-                {contextTargetLogs.length > 1 && (
-                  <span className="text-[10px] opacity-75 font-mono">({contextTargetLogs.length}行)</span>
-                )}
-              </button>
-            )}
+            ))}
           </div>
         </div>
       )}
@@ -1298,7 +1271,9 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                 >
                   <span>函数名</span>
                   <div className="flex items-center gap-1 min-w-0">
-                    <span className="text-[9px] text-slate-400 font-normal truncate">可复制</span>
+                    {copyActionsAt(registeredCopyActions, CopyPlacement.Header, 'functionName').length > 0 ? (
+                      <HeaderCopyButton label="函数名" isLight={isLight} onClick={(event) => { event.stopPropagation(); closeColumnFilter(); setCopyTarget({ actions: copyActionsAt(registeredCopyActions, CopyPlacement.Header, 'functionName'), anchor: event.currentTarget.getBoundingClientRect() }); }} />
+                    ) : null}
                     <HeaderFilterButton label="函数名" active={isFilterActive(ColumnFilterKey.FunctionName, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.FunctionName, event)} />
                   </div>
                   <div
@@ -1369,7 +1344,9 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                 >
                   <span>文件名</span>
                   <div className="flex items-center gap-1 min-w-0">
-                    <span className="text-[9px] text-slate-400 font-normal truncate">复制 file:lino</span>
+                    {copyActionsAt(registeredCopyActions, CopyPlacement.Header, 'fileName').length > 0 ? (
+                      <HeaderCopyButton label="文件名" isLight={isLight} onClick={(event) => { event.stopPropagation(); closeColumnFilter(); setCopyTarget({ actions: copyActionsAt(registeredCopyActions, CopyPlacement.Header, 'fileName'), anchor: event.currentTarget.getBoundingClientRect() }); }} />
+                    ) : null}
                     <HeaderFilterButton label="文件名" active={isFilterActive(ColumnFilterKey.FileName, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.FileName, event)} />
                   </div>
                   <div
@@ -1575,22 +1552,18 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                               legacyHighlightStyle={legacyHighlightStyle}
                             />
                           </span>
-                          {entry.fields?.functionName && (
+                          {entry.fields?.functionName && copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'functionName')[0] && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                copyText(entry.fields!.functionName, `func-${entry.id}`, `已复制函数名: ${entry.fields!.functionName}`, e);
+                                runRegisteredCopy(copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'functionName')[0], [entry]);
                               }}
                               className={`opacity-0 group-hover/func:opacity-100 p-0.5 rounded transition-opacity shrink-0 ml-1 cursor-pointer ${
                                 isLight ? 'hover:bg-slate-200 text-slate-600' : 'hover:bg-slate-700 text-slate-300'
                               }`}
-                              title="复制函数名"
+                              title={copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'functionName')[0].label}
                             >
-                              {copiedKey === `func-${entry.id}` ? (
-                                <Check className="w-3 h-3 text-emerald-500" />
-                              ) : (
-                                <Copy className="w-3 h-3" />
-                              )}
+                              <Copy className="w-3 h-3" />
                             </button>
                           )}
                         </div>
@@ -1682,23 +1655,18 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                               legacyHighlightStyle={legacyHighlightStyle}
                             />
                           </span>
-                          {entry.fields?.fileName && (
+                          {entry.fields?.fileName && copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'fileName')[0] && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const fileLinoStr = `${entry.fields!.fileName}:${entry.fields!.lineNumber}`;
-                                copyText(fileLinoStr, `filelino-${entry.id}`, `已复制: ${fileLinoStr}`, e);
+                                runRegisteredCopy(copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'fileName')[0], [entry]);
                               }}
                               className={`opacity-0 group-hover/file:opacity-100 p-0.5 rounded transition-opacity shrink-0 ml-1 cursor-pointer flex items-center gap-0.5 text-[10px] ${
                                 isLight ? 'hover:bg-slate-200 text-slate-600' : 'hover:bg-slate-700 text-slate-300'
                               }`}
-                              title={`复制 ${entry.fields?.fileName}:${entry.fields?.lineNumber}`}
+                              title={copyActionsAt(registeredCopyActions, CopyPlacement.Cell, 'fileName')[0].label}
                             >
-                              {copiedKey === `filelino-${entry.id}` ? (
-                                <Check className="w-3 h-3 text-emerald-500" />
-                              ) : (
-                                <Copy className="w-3 h-3" />
-                              )}
+                              <Copy className="w-3 h-3" />
                             </button>
                           )}
                         </div>
@@ -1755,6 +1723,17 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
           theme={theme}
           onFilterChange={onFilterChange}
           onClose={closeColumnFilter}
+        />
+      ) : null}
+      {copyTarget ? (
+        <CopyActionPopover
+          actions={copyTarget.actions}
+          selectedLogs={selectedLogs}
+          filteredLogs={logs}
+          anchor={copyTarget.anchor}
+          theme={theme}
+          onResult={(feedback) => { setToastOk(feedback.ok); setToastMessage(feedback.message); setTimeout(() => setToastMessage(null), 2400); }}
+          onClose={() => setCopyTarget(null)}
         />
       ) : null}
     </div>

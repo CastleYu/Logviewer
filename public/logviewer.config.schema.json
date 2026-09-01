@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://logviewer.local/schemas/logviewer-config-1.0.json",
+  "$id": "https://logviewer.local/schemas/logviewer-config-1.1.json",
   "title": "LogViewer format configuration",
   "type": "object",
   "additionalProperties": false,
   "required": ["contractVersion", "formats"],
   "properties": {
     "$schema": { "type": "string" },
-    "contractVersion": { "const": "1.0" },
+    "contractVersion": { "enum": ["1.0", "1.1"] },
     "defaultFormat": { "type": "string", "minLength": 1 },
     "formats": {
       "type": "array",
@@ -68,6 +68,10 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/field" }
+        },
+        "copyActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/copyAction" }
         },
         "tests": {
           "type": "array",
@@ -188,7 +192,67 @@
             "copyable": { "type": "boolean" }
           }
         },
+        "copy": { "$ref": "#/$defs/fieldCopy" },
         "filter": { "$ref": "#/$defs/filter" }
+      }
+    },
+    "fieldCopy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "label": { "type": "string", "minLength": 1 },
+        "placements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["cell", "header", "context-menu"] }
+        }
+      }
+    },
+    "copyAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "anchorField", "placements", "parts"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" },
+        "label": { "type": "string", "minLength": 1 },
+        "anchorField": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" },
+        "placements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["cell", "header", "context-menu"] }
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "field"],
+                "properties": { "kind": { "const": "field" }, "field": { "type": "string" } }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "value"],
+                "properties": { "kind": { "const": "literal" }, "value": { "type": "string" } }
+              }
+            ]
+          }
+        },
+        "rows": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "separator": { "type": "string" },
+            "missing": { "enum": ["empty", "skip-row", "disable"] }
+          }
+        }
       }
     },
     "filter": {

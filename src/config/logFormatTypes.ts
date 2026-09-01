@@ -1,5 +1,6 @@
 export enum ContractVersion {
   V1 = '1.0',
+  V1_1 = '1.1',
 }
 
 export enum BuiltinFormatId {
@@ -80,6 +81,28 @@ export enum ConfigErrorCode {
   FilterTypeMismatch = 'CFG_FILTER_TYPE_MISMATCH',
   DateTimeFormatMissing = 'CFG_DATETIME_FORMAT_MISSING',
   TestFailed = 'CFG_TEST_FAILED',
+  CopyActionIdDuplicate = 'CFG_COPY_ACTION_ID_DUPLICATE',
+  CopyFieldUnknown = 'CFG_COPY_FIELD_UNKNOWN',
+  CopyAnchorInvalid = 'CFG_COPY_ANCHOR_INVALID',
+  CopyCellConflict = 'CFG_COPY_CELL_CONFLICT',
+  CopyConfigConflict = 'CFG_COPY_CONFIG_CONFLICT',
+}
+
+export enum CopyPlacement {
+  Cell = 'cell',
+  Header = 'header',
+  ContextMenu = 'context-menu',
+}
+
+export enum CopyPartKind {
+  Field = 'field',
+  Literal = 'literal',
+}
+
+export enum CopyMissingPolicy {
+  Empty = 'empty',
+  SkipRow = 'skip-row',
+  Disable = 'disable',
 }
 
 export interface FormatMatchConfig {
@@ -146,6 +169,38 @@ export interface FieldDisplayConfig {
   copyable?: boolean;
 }
 
+export interface FieldCopyConfig {
+  enabled: boolean;
+  label?: string;
+  placements?: CopyPlacement[];
+}
+
+export interface CopyFieldPartConfig {
+  kind: CopyPartKind.Field;
+  field: string;
+}
+
+export interface CopyLiteralPartConfig {
+  kind: CopyPartKind.Literal;
+  value: string;
+}
+
+export type CopyPartConfig = CopyFieldPartConfig | CopyLiteralPartConfig;
+
+export interface CopyRowsConfig {
+  separator?: string;
+  missing?: CopyMissingPolicy;
+}
+
+export interface CopyActionConfig {
+  id: string;
+  label: string;
+  anchorField: string;
+  placements: CopyPlacement[];
+  parts: CopyPartConfig[];
+  rows?: CopyRowsConfig;
+}
+
 export interface NoneFilterConfig {
   kind: FieldFilterKind.None;
 }
@@ -193,6 +248,7 @@ export interface LogFieldConfig {
     timezone?: 'preserve' | 'utc' | 'local';
   };
   display?: FieldDisplayConfig;
+  copy?: FieldCopyConfig;
   filter: FieldFilterConfig;
 }
 
@@ -217,6 +273,7 @@ export interface LogFormatConfig {
     messageField?: string;
   };
   fields: LogFieldConfig[];
+  copyActions?: CopyActionConfig[];
   tests?: FormatTestConfig[];
   builtin?: boolean;
 }
@@ -258,4 +315,16 @@ export interface RuntimeFilterSummary {
   key: string;
   label: string;
   summary: string;
+}
+
+export interface RuntimeCopyAction extends CopyActionConfig {
+  sourceField?: string;
+}
+
+export interface CopyBuildResult {
+  ok: boolean;
+  text: string;
+  rowCount: number;
+  missingCount: number;
+  error?: string;
 }

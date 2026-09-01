@@ -1,6 +1,6 @@
 {
   "$schema": "./logviewer.config.schema.json",
-  "contractVersion": "1.0",
+  "contractVersion": "1.1",
   "defaultFormat": "builtin-standard-bracket-v1",
   "formats": [
     {
@@ -82,6 +82,11 @@
           "type": "string",
           "required": true,
           "display": { "visible": true, "width": 480, "grow": true },
+          "copy": {
+            "enabled": true,
+            "label": "复制消息",
+            "placements": ["cell", "header", "context-menu"]
+          },
           "filter": {
             "kind": "text",
             "defaultOperator": "contains",
@@ -133,6 +138,21 @@
           "type": "integer",
           "display": { "visible": true, "width": 72, "align": "right" },
           "filter": { "kind": "none" }
+        }
+      ],
+      "copyActions": [
+        {
+          "id": "level-message",
+          "label": "复制 [级别] 消息",
+          "anchorField": "message",
+          "placements": ["context-menu"],
+          "parts": [
+            { "kind": "literal", "value": "[" },
+            { "kind": "field", "field": "level" },
+            { "kind": "literal", "value": "] " },
+            { "kind": "field", "field": "message" }
+          ],
+          "rows": { "separator": "\n", "missing": "empty" }
         }
       ],
       "tests": [

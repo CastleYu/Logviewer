@@ -922,6 +922,7 @@ export default function App() {
           {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
           {selectedFormat.builtin ? <VirtualLogTable
             logs={filteredLogs}
+            format={selectedFormat}
             density={density}
             columnVisibility={columnVisibility}
             selectedIds={selectedIds}
