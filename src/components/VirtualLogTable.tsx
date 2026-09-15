@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity, ColumnFilterKey, FilterValue, LogLevel } from '../types';
 import { HighlightedText } from './HighlightedText';
+import { SourceMenuItem } from './SourceNavigation';
+import { sourceField } from '../utils/sourceUtils';
 import { ColumnFilterPopover } from './ColumnFilterPopover';
 import { CopyActionPopover, HeaderCopyButton, copyActionToClipboard } from './CopyActionPopover';
 import { CopyPlacement, LogFormatConfig, RuntimeCopyAction } from '../config/logFormatTypes';
@@ -51,6 +53,7 @@ interface VirtualLogTableProps {
 }
 
 interface ContextMenuState {
+  field: string;
   x: number;
   y: number;
   log: LogEntry;
@@ -720,12 +723,13 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const menuWidth = 200;
-    const menuHeight = 180;
+    const menuHeight = 240;
 
     const posX = e.clientX + menuWidth > viewportWidth ? e.clientX - menuWidth : e.clientX;
     const posY = e.clientY + menuHeight > viewportHeight ? e.clientY - menuHeight : e.clientY;
 
     setContextMenu({
+      field: sourceField(e),
       x: posX,
       y: posY,
       log: entry,
@@ -1105,7 +1109,8 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
       {/* 右键上下文弹出菜单 */}
       {contextMenu && (
         <div
-          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          role="menu" aria-label="日志上下文菜单"
+          style={{ top: `${Math.max(8, contextMenu.y)}px`, left: `${Math.max(8, Math.min(contextMenu.x, window.innerWidth - 232))}px`, maxHeight: 'calc(100vh - 16px)', overflowY: 'auto' }}
           className={`fixed z-50 w-56 rounded-lg shadow-2xl py-1 text-xs font-sans border backdrop-blur-md animate-in fade-in zoom-in-95 duration-100 ${
             isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-slate-900 border-slate-700 text-slate-200'
           }`}
@@ -1123,6 +1128,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
           </div>
 
           <div className="py-0.5">
+            <SourceMenuItem log={contextMenu.log} format={format} field={contextMenu.field} light={isLight} onClose={() => setContextMenu(null)} />
             {/* 原文复制 */}
             <button
               onClick={(e) => {
@@ -1180,7 +1186,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 序号列 header */}
               {columnVisibility.index && (
                 <div 
-                  style={{ width: `${colWidths.index}px` }} 
+                  data-source-field="index" style={{ width: `${colWidths.index}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Index, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>#</span>
@@ -1197,7 +1203,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 时间戳列 header */}
               {columnVisibility.timestamp && (
                 <div 
-                  style={{ width: `${colWidths.timestamp}px` }} 
+                  data-source-field="timestamp" style={{ width: `${colWidths.timestamp}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Timestamp, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>时间戳</span>
@@ -1215,7 +1221,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 级别列 header */}
               {columnVisibility.level && (
                 <div 
-                  style={{ width: `${colWidths.level}px` }} 
+                  data-source-field="level" style={{ width: `${colWidths.level}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Level, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>级别</span>
@@ -1232,7 +1238,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 请求ID列 header */}
               {columnVisibility.requestId && (
                 <div 
-                  style={{ width: `${colWidths.requestId}px` }} 
+                  data-source-field="requestId" style={{ width: `${colWidths.requestId}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.RequestId, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>请求ID</span>
@@ -1266,7 +1272,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 函数名列 header */}
               {columnVisibility.functionName && (
                 <div 
-                  style={{ width: `${colWidths.functionName}px` }} 
+                  data-source-field="functionName" style={{ width: `${colWidths.functionName}px` }}
                   className={`shrink-0 pl-2 py-1 border-r flex items-center justify-between relative group ${isFilterActive(ColumnFilterKey.FunctionName, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>函数名</span>
@@ -1288,7 +1294,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 线程ID列 header */}
               {columnVisibility.threadId && (
                 <div 
-                  style={{ width: `${colWidths.threadId}px` }} 
+                  data-source-field="threadId" style={{ width: `${colWidths.threadId}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.ThreadId, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>线程ID</span>
@@ -1305,7 +1311,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 内存地址列 header */}
               {columnVisibility.memoryAddress && (
                 <div 
-                  style={{ width: `${colWidths.memoryAddress}px` }} 
+                  data-source-field="memoryAddress" style={{ width: `${colWidths.memoryAddress}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.MemoryAddress, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>内存地址</span>
@@ -1322,7 +1328,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 模块列 header */}
               {columnVisibility.module && (
                 <div 
-                  style={{ width: `${colWidths.module}px` }} 
+                  data-source-field="module" style={{ width: `${colWidths.module}px` }}
                   className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Module, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>模块</span>
@@ -1339,7 +1345,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 文件名列 header */}
               {columnVisibility.fileName && (
                 <div 
-                  style={{ width: `${colWidths.fileName}px` }} 
+                  data-source-field="fileName" style={{ width: `${colWidths.fileName}px` }}
                   className={`shrink-0 pl-2 py-1 border-r flex items-center justify-between relative group ${isFilterActive(ColumnFilterKey.FileName, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
                   <span>文件名</span>
@@ -1361,7 +1367,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               {/* 行号列 header */}
               {columnVisibility.lineNumber && (
                 <div 
-                  style={{ width: `${colWidths.lineNumber}px` }} 
+                  data-source-field="lineNumber" style={{ width: `${colWidths.lineNumber}px` }}
                   className="shrink-0 px-2 py-1.5 text-right pr-3 relative group"
                 >
                   <span>行号</span>
@@ -1416,7 +1422,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                   {/* 序号列 */}
                   {columnVisibility.index && (
                     <div 
-                      style={{ width: `${colWidths.index}px` }} 
+                      data-source-field="index" style={{ width: `${colWidths.index}px` }}
                       className={`shrink-0 px-2 text-center text-slate-400 text-[10px] truncate border-r font-mono flex items-center justify-center ${borderClass}`}
                     >
                       {entry.lineNumber}
@@ -1457,7 +1463,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 1. 时间戳 */}
                       {columnVisibility.timestamp && (
                         <div 
-                          style={{ width: `${colWidths.timestamp}px` }} 
+                          data-source-field="timestamp" style={{ width: `${colWidths.timestamp}px` }}
                           className={`shrink-0 px-2 font-mono truncate border-r select-text flex items-center ${borderClass}`}
                         >
                           <HighlightedText
@@ -1478,7 +1484,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 2. 日志级别 */}
                       {columnVisibility.level && (
                         <div 
-                          style={{ width: `${colWidths.level}px` }} 
+                          data-source-field="level" style={{ width: `${colWidths.level}px` }}
                           className={`shrink-0 px-1 text-center border-r flex items-center justify-center ${borderClass}`}
                         >
                           <span className={`inline-block px-1.5 py-0.2 rounded text-[10px] tracking-wider ${getLevelStyle(entry.fields?.level)}`}>
@@ -1490,7 +1496,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 3. 请求ID */}
                       {columnVisibility.requestId && (
                         <div 
-                          style={{ width: `${colWidths.requestId}px` }} 
+                          data-source-field="requestId" style={{ width: `${colWidths.requestId}px` }}
                           className={`shrink-0 px-2 font-mono text-blue-500 dark:text-blue-300/90 truncate border-r select-text flex items-center ${borderClass}`} 
                           title={entry.fields?.requestId}
                         >
@@ -1512,7 +1518,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 4. 操作描述 */}
                       {columnVisibility.operationDesc && (
                         <div
-                          style={{ minWidth: `${colWidths.operationDesc}px` }}
+                          data-source-field="operationDesc" style={{ minWidth: `${colWidths.operationDesc}px` }}
                           className={`flex-1 shrink-0 px-2.5 font-mono border-r select-text flex items-center ${borderClass} ${textDisplayClass}`}
                           title={entry.fields?.operationDesc}
                         >
@@ -1534,7 +1540,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 5. 函数名 */}
                       {columnVisibility.functionName && (
                         <div 
-                          style={{ width: `${colWidths.functionName}px` }} 
+                          data-source-field="functionName" style={{ width: `${colWidths.functionName}px` }}
                           className={`shrink-0 px-2 font-mono text-emerald-600 dark:text-emerald-300/90 border-r flex items-center justify-between group/func overflow-hidden ${borderClass}`} 
                           title={entry.fields?.functionName}
                         >
@@ -1572,7 +1578,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 6. 线程ID */}
                       {columnVisibility.threadId && (
                         <div 
-                          style={{ width: `${colWidths.threadId}px` }} 
+                          data-source-field="threadId" style={{ width: `${colWidths.threadId}px` }}
                           className={`shrink-0 px-2 text-center font-mono text-purple-600 dark:text-purple-300/80 truncate border-r select-text flex items-center justify-center ${borderClass}`}
                         >
                           <HighlightedText
@@ -1593,7 +1599,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 7. 内存地址 */}
                       {columnVisibility.memoryAddress && (
                         <div 
-                          style={{ width: `${colWidths.memoryAddress}px` }} 
+                          data-source-field="memoryAddress" style={{ width: `${colWidths.memoryAddress}px` }}
                           className={`shrink-0 px-2 font-mono text-slate-500 dark:text-slate-400 truncate border-r text-[11px] select-text flex items-center ${borderClass}`} 
                           title={entry.fields?.memoryAddress}
                         >
@@ -1615,7 +1621,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 8. 模块 */}
                       {columnVisibility.module && (
                         <div 
-                          style={{ width: `${colWidths.module}px` }} 
+                          data-source-field="module" style={{ width: `${colWidths.module}px` }}
                           className={`shrink-0 px-2 font-mono text-amber-600 dark:text-amber-300/80 truncate border-r select-text flex items-center ${borderClass}`} 
                           title={entry.fields?.module}
                         >
@@ -1637,7 +1643,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 9. 文件名 */}
                       {columnVisibility.fileName && (
                         <div 
-                          style={{ width: `${colWidths.fileName}px` }} 
+                          data-source-field="fileName" style={{ width: `${colWidths.fileName}px` }}
                           className={`shrink-0 px-2 font-mono text-slate-700 dark:text-slate-300 border-r text-[11px] flex items-center justify-between group/file overflow-hidden ${borderClass}`} 
                           title={`${entry.fields?.fileName}:${entry.fields?.lineNumber}`}
                         >
@@ -1675,7 +1681,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       {/* 10. 行号 */}
                       {columnVisibility.lineNumber && (
                         <div 
-                          style={{ width: `${colWidths.lineNumber}px` }} 
+                          data-source-field="lineNumber" style={{ width: `${colWidths.lineNumber}px` }}
                           className="shrink-0 px-2 text-right pr-3 font-mono text-slate-400 select-text flex items-center justify-end gap-1"
                         >
                           <span className="select-text">{entry.fields?.lineNumber}</span>

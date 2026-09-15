@@ -1,4 +1,5 @@
 import React from 'react';
+import { SourceSettings } from './SourceSettings';
 import { LogStats, ThemeMode } from '../types';
 import { ConfigError, LogFormatConfig } from '../config/logFormatTypes';
 import { formatFileSize } from '../utils/logParser';
@@ -53,6 +54,7 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
     <header className={`shrink-0 border-b ${isLight ? 'bg-white/90 border-slate-200/80' : 'bg-slate-950/90 border-slate-800/80'} backdrop-blur-md transition-colors relative z-40`}>
       {/* 紧凑版顶栏：整合 Logo、文件按钮与核心统计指标为单行/极窄结构 */}
       <div className="flex flex-wrap items-center justify-between px-3 py-1.5 gap-2">
+        <SourceSettings format={formats.find((item) => item.id === selectedFormatId) || formats[0]} light={isLight} />
         {/* 左侧：Logo & 文件简讯 */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2 shrink-0">

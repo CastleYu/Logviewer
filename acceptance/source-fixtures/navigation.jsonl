@@ -1,0 +1,3 @@
+{"time":"2026-09-15T10:00:00Z","level":"INFO","message":"unique.py","context":{"requestId":"REQ-1"},"durationMs":1,"service":"test","source":{"line":4}}
+{"time":"2026-09-15T10:00:01Z","level":"INFO","message":"shared.py","context":{"requestId":"REQ-2"},"durationMs":1,"service":"test","source":{"line":4}}
+{"time":"2026-09-15T10:00:02Z","level":"WARN","message":"missing.py","context":{"requestId":"REQ-3"},"durationMs":1,"service":"test","source":{"line":4}}

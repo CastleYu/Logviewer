@@ -1,6 +1,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import { SourceConst } from '../src/config/sourceTypes';
+import { SourceService } from './services/sourceService';
+import { registerSourceRoutes } from './routes/sourceRoutes';
+import { HttpConst } from './config/httpConstants';
+import { localAccess } from './routes/localAccess';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { EnvKey, ServerValue } from './config/constants';
@@ -15,7 +20,11 @@ const app = express();
 const port = Number(process.env[EnvKey.ListenPort]) || ServerValue.DefaultListenPort;
 const production = process.argv.includes('--production');
 
+app.use(HttpConst.Api, localAccess);
 app.use(express.json({ limit: '32kb' }));
+const sources = new SourceService(path.join(rootDir, SourceConst.Store));
+await sources.init();
+registerSourceRoutes(app, sources);
 const sftpProfile = SftpConfig.load();
 registerSftpRoutes(app, new DownloadService(sftpProfile, rootDir), sftpProfile);
 

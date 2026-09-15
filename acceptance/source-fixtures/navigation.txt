@@ -1,0 +1,6 @@
+[2026-09-15 10:00:00.000][INFO][REQ-1][Unique file][target][T-1][0x1][test][unique.py][4]
+[2026-09-15 10:00:01.000][INFO][REQ-2][Duplicate file][target][T-1][0x1][test][shared.py][4]
+[2026-09-15 10:00:02.000][WARN][REQ-3][Missing file][target][T-1][0x1][test][missing.py][4]
+[2026-09-15 10:00:03.000][INFO][REQ-4][Java file][target][T-1][0x1][test][SourceExample.java][3]
+[2026-09-15 10:00:04.000][INFO][REQ-5][C file][target][T-1][0x1][test][source_example.c][2]
+[2026-09-15 10:00:05.000][INFO][REQ-6][CPP file][target][T-1][0x1][test][source_example.cpp][2]
