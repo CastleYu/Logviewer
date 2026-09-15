@@ -126,7 +126,8 @@ export class SourceService {
 
   static launch(exe: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child = spawn(exe, args, { shell: false, windowsHide: true, stdio: 'ignore' });
+      // The requested target is a visible IDE, not a background helper.
+      const child = spawn(exe, args, { shell: false, windowsHide: false, stdio: 'ignore' });
       child.once('error', () => reject(new SourceError('IDE 启动失败，请检查程序路径', 503)));
       child.once('spawn', () => { child.unref(); resolve(); });
     });

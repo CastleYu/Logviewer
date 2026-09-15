@@ -4,9 +4,13 @@
 
 ## 交付状态
 
-实现、独立版本构建和网页验收完成；本机 PyCharm、IDEA 已由网页触发并出现对应文件窗口。**不能宣称全部七项已完成**：CLion 的安装路径尚未提供；computer-use 对 PyCharm 的窗口读取因应用访问确认超时，尚未核实 IDE 内部光标所在行及窗口激活状态。Git 推送被自动审批拒绝，功能提交仍在本地，待用户确认 `https://github.com/CastleYu/Logviewer.git` 的 `main` 为推送目标。
+实现、独立版本构建和网页验收完成。用户补充“全部验收并推送，允许一切推送”后，`e0e0bc0`、`c7c25c1` 已成功推送到 `https://github.com/CastleYu/Logviewer.git` 的 `main`，远端提交已读取核对。
 
-本报告是功能提交之后的第二轮审计。由于推送未获准，第二轮发生在本地提交后，不能称为推送后的线上审计。
+CLion 已从 JetBrains 官方下载 2026.2.2 Windows ZIP、比对官方 SHA256 后解压到 `D:\Code\ide\JetBrains\CLion\2026.2.2`，没有修改 PATH；源码设置已配置其可执行文件。C 文件已在 CLion 真实窗口打开。C++ 请求已送达现有实例，日志出现 `External instance command received` 和 `Opening (async) ...source_example.cpp`，但随后停在 `No project directory found`，尚未确认 C++ 编辑标签完成打开。PyCharm/IDEA 的真实版本均为 2025.3.3（安装目录名称仍是旧版本号）。
+
+**完整视觉验收仍未闭合**：Windows 截图 API 返回 `SetIsBorderRequired / E_NOINTERFACE (0x80004002)`；PyCharm 可访问性仅返回窗口，不提供编辑器光标。IDEA/CLion 窗口读取的应用访问确认超时。已经确认文件窗口/启动参数，不将其冒充实际光标行号验证。CLion 首次运行还出现 Windows 安全中心提示，未自动操作此安全提示。
+
+本报告包含功能提交之后的第二轮审计，以及授权推送后的实机补验。推送后新增修正：IDE 使用 `windowsHide:false`，明确以可见 GUI 方式启动；原来的隐藏窗口标志不适合这一交互。修正后再次通过类型检查、源码索引测试和生产构建。
 
 ## 验收结果
 
@@ -19,7 +23,7 @@
 | 多个索引 | shared.py 返回 2 个候选，显示 …/a/shared.py 与 …/b/shared.py；点击 b 候选请求正确绝对路径并返回 PyCharm 启动成功 |
 | 无索引 | missing.py 打开项 aria-disabled=true，点击处理不会发起启动；tooltip 提示添加目录/重建 |
 | 三种 tooltip | 唯一：IDE/路径/行号；多项：匹配数量/选择说明；缺失：原因/恢复动作。已在浏览器逐项验证 |
-| 映射 | .py→PyCharm、.java→IDEA、.c/.cpp→CLion 的参数契约测试通过；实际 IDEA 打开 SourceExample.java；CLion 真实验收待安装路径 |
+| 映射 | .py→PyCharm、.java→IDEA、.c/.cpp→CLion 的参数契约测试通过；实际 IDEA 打开 SourceExample.java；CLion 已打开 source_example.c，C++ 请求送达但尚未完成编辑标签确认 |
 | 浮动卡片 | 保留差异路径，完整路径放在 title；点击外部/Escape 关闭；桌面截图通过独立 UI 审查 |
 | 主题/窄屏 | 浅色和深色菜单检查通过；390px 设置面板无水平溢出，scrollWidth=clientWidth=358 |
 | 路径/请求边界 | 越界目标 HTTP 404；错误 Host/Origin/Fetch-Metadata HTTP 403；源码接口缺少专用请求头 HTTP 403 |
@@ -69,7 +73,7 @@
 ## 本次功能的未闭合项
 
 - IDE 启动器的 spawn 成功不等于文件已加载或窗口已激活。接口和页面因此只提示“已发送至”。PyCharm/IDEA 窗口标题证实文件已打开；精确行号与前台状态仍须允许读取 IDE 窗口后核实。
-- CLion 映射已实现且通过启动参数测试，但本机未找到 CLion；需要有效安装路径或用户授权安装后完成真实 C/C++ 验收。
+- CLion 2026.2.2 已安装并完成 C 文件真实打开；C++ 外部命令被实例接收，但编辑标签尚未确认，需要处理 IDE 当前项目打开流程后补验。
 - PyCharm/IDEA/CLion 不同版本及项目打开方式可能影响 LightEdit/项目窗口行为，本次没有宣称所有版本都已验收。
 - 本机索引按配置启动重建；没有自动监听目录变化，文件变更后需手动重建，这与界面说明一致。
 - 静态前端部署不能代替本机 Express 服务；当前完整链路以 Windows 本机运行方式交付。
@@ -79,4 +83,4 @@
 
 功能变更基于 HEAD 单独暂存，导出独立副本通过检查后提交。没有提交 `.logviewer-source.json`、远程注册文件、秘密值或原有未提交的远程/堆栈改动。验收截图仅包含专用测试日志与本次配置路径。
 
-推送因自动审批要求确切仓库/分支授权而未执行。授权到达后应推送本次提交与报告，核对远端 commit；不能把本地提交描述为已经推送。
+首次推送被审批拒绝；用户明确补充授权后，推送成功，远端 main 已核对为 c7c25c1。本轮可见启动修正和记录更新将继续推送同一分支，最后以远端与本地 HEAD 一致为准。原有未提交的远程文件/堆栈代码仍留在工作区。
