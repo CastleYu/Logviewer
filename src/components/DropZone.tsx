@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Sparkles, Code, Server } from 'lucide-react';
+import { Upload, FileText, Sparkles, Code, Server, FolderOpen } from 'lucide-react';
 import { ThemeMode } from '../types';
 
 interface DropZoneProps {
   onFileSelected: (file: File) => void;
   onSelectRemote: () => void;
+  onOpenBrowse?: () => void;
   onLoadSample: (count: number) => void;
   isLoading: boolean;
   theme?: ThemeMode;
@@ -13,6 +14,7 @@ interface DropZoneProps {
 export const DropZone: React.FC<DropZoneProps> = ({
   onFileSelected,
   onSelectRemote,
+  onOpenBrowse,
   onLoadSample,
   isLoading,
   theme = 'dark',
@@ -115,8 +117,24 @@ export const DropZone: React.FC<DropZoneProps> = ({
             }`}
           >
             <Server className="w-4 h-4" />
-            打开 SFTP 文件
+            打开远程文件
           </button>
+
+          {onOpenBrowse ? (
+            <button
+              type="button"
+              onClick={onOpenBrowse}
+              disabled={isLoading}
+              className={`flex items-center gap-2 px-5 py-2.5 font-semibold text-xs rounded-lg transition-all border disabled:cursor-not-allowed disabled:opacity-45 ${
+                isLight
+                  ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+                  : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4" />
+              远程目录浏览
+            </button>
+          ) : null}
 
           <button
             onClick={() => onLoadSample(10000)}

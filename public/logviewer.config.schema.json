@@ -1,13 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://logviewer.local/schemas/logviewer-config-1.1.json",
+  "$id": "https://logviewer.local/schemas/logviewer-config-1.2.json",
   "title": "LogViewer format configuration",
   "type": "object",
   "additionalProperties": false,
   "required": ["contractVersion", "formats"],
+  "allOf": [{
+    "if": { "properties": { "contractVersion": { "enum": ["1.0", "1.1"] } } },
+    "then": { "properties": { "formats": { "items": { "properties": { "record": {
+      "properties": { "mode": { "const": "line" }, "startPattern": false, "stackField": false }
+    } } } } } }
+  }],
   "properties": {
     "$schema": { "type": "string" },
-    "contractVersion": { "enum": ["1.0", "1.1"] },
+    "contractVersion": { "enum": ["1.0", "1.1", "1.2"] },
     "defaultFormat": { "type": "string", "minLength": 1 },
     "formats": {
       "type": "array",
@@ -45,7 +51,9 @@
           "additionalProperties": false,
           "required": ["mode"],
           "properties": {
-            "mode": { "const": "line" },
+            "mode": { "enum": ["line", "stack"] },
+            "startPattern": { "type": "string", "pattern": "^\\^", "minLength": 2 },
+            "stackField": { "type": "string", "minLength": 1 },
             "encoding": { "type": "string" },
             "skipEmpty": { "type": "boolean" }
           }

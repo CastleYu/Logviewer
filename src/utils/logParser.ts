@@ -1,4 +1,8 @@
 import { LogEntry, LogStats, ParsedLogFields } from '../types';
+import { RecordConfig } from '../config/logFormatTypes';
+import { RecordMode, StackPattern } from '../config/stackTypes';
+import { splitRecords } from './logRecords';
+import { attachStack } from './recordEntries';
 
 /**
  * ============================================================================
@@ -259,7 +263,8 @@ export function parseSingleLogLine(lineText: string, index: number): LogEntry {
 export function parseLogContent(
   fullContent: string,
   fileName: string,
-  fileSize: number
+  fileSize: number,
+  record: RecordConfig = { mode: RecordMode.Line },
 ): { logs: LogEntry[]; stats: LogStats } {
   const startTime = performance.now();
 
@@ -271,7 +276,10 @@ export function parseLogContent(
     rawLines.pop();
   }
 
-  const totalCount = rawLines.length;
+  const pattern = record.startPattern ? new RegExp(record.startPattern) : StackPattern.header;
+  const isHead = (line: string) => pattern.test(line);
+  const records = splitRecords(fullContent, record.mode, isHead, (line) => parseSingleLogLine(line, 0).fields?.operationDesc || line);
+  const totalCount = records.length;
   const logs: LogEntry[] = new Array(totalCount);
   let successCount = 0;
   let failedCount = 0;
@@ -284,7 +292,10 @@ export function parseLogContent(
   };
 
   for (let i = 0; i < totalCount; i++) {
-    const entry = parseSingleLogLine(rawLines[i], i);
+    const item = records[i];
+    const whole = item.end > item.start && item.raw.trimEnd().endsWith(']')
+      && Boolean(parseForwardBracketDepth(item.raw) || parseBidirectional10Fields(item.raw));
+    const entry = attachStack(parseSingleLogLine(whole ? item.raw : item.head, item.start - 1), item, record, isHead(item.head), undefined, whole);
     logs[i] = entry;
 
     if (entry.success && entry.fields) {
@@ -304,6 +315,7 @@ export function parseLogContent(
   const parseDurationMs = Math.round((endTime - startTime) * 100) / 100;
 
   const stats: LogStats = {
+    physicalLineCount: rawLines.length,
     fileName,
     fileSize,
     totalCount,

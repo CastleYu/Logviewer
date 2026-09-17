@@ -17,9 +17,14 @@ import { FloatingErrorNav } from './components/FloatingErrorNav';
 import { ConfigurableLogTable } from './components/ConfigurableLogTable';
 import { FileLoadBar } from './components/FileLoadBar';
 import { RemoteFileDialog } from './components/RemoteFileDialog';
+import { BrowseOpenRequest, RemoteBrowseWindow } from './components/RemoteBrowseWindow';
 import { DownloadStatus, FileLoadState, LoadPhase, LoadSourceKind, LoadState, SftpProfileView } from './config/fileLoadTypes';
 import { RemoteFileApi } from './services/remoteFileApi';
 import { Upload } from 'lucide-react';
+import { RecordMode } from './config/stackTypes';
+import { StackDetail } from './components/StackDetail';
+import { searchText } from './utils/recordEntries';
+import { csvLogs, jsonLogs } from './utils/logExport';
 
 const defaultColumnWidths: ColumnWidths = {
   index: 48,
@@ -72,12 +77,12 @@ function fieldText(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function csvCell(value: unknown): string {
-  return `"${fieldText(value).replace(/"/g, '""')}"`;
-}
-
 export default function App() {
   const [formats, setFormats] = useState<LogFormatConfig[]>(() => [createBuiltinLogFormat()]);
+  const [stackMode, setStackMode] = useState<boolean | undefined>(undefined);
+  const stackModeRef = useRef<boolean | undefined>(undefined);
+  const [stackId, setStackId] = useState<number | null>(null);
+  const openStack = useCallback((log: LogEntry) => setStackId(log.id), []);
   const [selectedFormatId, setSelectedFormatId] = useState<string>(BuiltinFormatId.LegacyStandard);
   const [configErrors, setConfigErrors] = useState<ConfigError[]>([]);
   const [source, setSource] = useState<LoadedSource | null>(null);
@@ -94,7 +99,14 @@ export default function App() {
   const cancelledLoadIdsRef = useRef<Set<number>>(new Set());
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [sftpProfiles, setSftpProfiles] = useState<SftpProfileView[]>([]);
+  const [browseVisible, setBrowseVisible] = useState(false);
+  const [browseRequest, setBrowseRequest] = useState<BrowseOpenRequest | null>(null);
   const isBusy = LoadState.busy(fileLoad) || isLoading;
+
+  const openBrowseWindow = useCallback((profileId?: string, path?: string) => {
+    setBrowseRequest({ nonce: Date.now(), profileId, path });
+    setBrowseVisible(true);
+  }, []);
 
   const publishLoad = useCallback((next: FileLoadState) => {
     fileLoadRef.current = next;
@@ -130,11 +142,15 @@ export default function App() {
     publishLoad({ ...fileLoadRef.current, phase: LoadPhase.Error, message });
   }, [publishLoad]);
 
-  useEffect(() => {
+  const refreshRemoteProfiles = useCallback(() => {
     RemoteFileApi.profiles()
       .then(setSftpProfiles)
       .catch(() => setSftpProfiles([{ id: 'default', name: '默认 SFTP 服务器', root: '/', ready: false }]));
   }, []);
+
+  useEffect(() => {
+    refreshRemoteProfiles();
+  }, [refreshRemoteProfiles]);
 
   // 主题模式 (dark / light) 默认使用浅色 (light)
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -291,9 +307,12 @@ export default function App() {
     if (loadId !== undefined) updateLoad(loadId, { phase: LoadPhase.Parsing, loadedBytes: loaded.fileSize, totalBytes: loaded.fileSize });
     setTimeout(() => {
       if (parseSequenceRef.current !== parseId) return;
+      const mode = stackModeRef.current === undefined ? format.record.mode : stackModeRef.current ? RecordMode.Stack : RecordMode.Line;
+      const activeFormat = { ...format, record: { ...format.record, mode } };
+      setStackId(null);
       const result = format.builtin
-        ? parseLogContent(loaded.content, loaded.fileName, loaded.fileSize)
-        : parseConfiguredLogContent(loaded.content, loaded.fileName, loaded.fileSize, format);
+        ? parseLogContent(loaded.content, loaded.fileName, loaded.fileSize, activeFormat.record)
+        : parseConfiguredLogContent(loaded.content, loaded.fileName, loaded.fileSize, activeFormat);
       const { logs: parsedLogs, stats: parsedStats } = result;
       setLogs(parsedLogs);
       setStats(parsedStats);
@@ -353,6 +372,18 @@ export default function App() {
     }
   }, [beginLoad, formats, isBusy, parseSource, source]);
 
+  const handleStackMode = (enabled: boolean) => {
+    if (isBusy) return;
+    stackModeRef.current = enabled;
+    setStackMode(enabled);
+    setSelectedIds(new Set());
+    setStackId(null);
+    if (source) {
+      const loadId = beginLoad(LoadPhase.Parsing, LoadSourceKind.Reparse, source.fileName, source.fileSize);
+      if (loadId !== null) parseSource(source, selectedFormat, 10, loadId);
+    }
+  };
+
   const handleFile = useCallback((file: File) => {
     const loadId = beginLoad(LoadPhase.Reading, LoadSourceKind.Local, file.name, file.size);
     if (loadId === null) return;
@@ -380,6 +411,8 @@ export default function App() {
     const fileName = remotePath.split('/').filter(Boolean).pop() || '远程文件';
     const loadId = beginLoad(LoadPhase.Downloading, LoadSourceKind.Remote, fileName);
     if (loadId === null) return;
+    const remoteKind = sftpProfiles.find((item) => item.id === profileId)?.protocol === 'smb' ? 'smb' : 'sftp';
+    updateLoad(loadId, { remoteKind });
     setRemoteDialogOpen(false);
     try {
       let task = await RemoteFileApi.create(profileId, remotePath);
@@ -405,7 +438,7 @@ export default function App() {
     } catch (error) {
       failLoad(loadId, error instanceof Error ? error.message : '远程文件加载失败');
     }
-  }, [beginLoad, failLoad, handleLoadContent, updateLoad]);
+  }, [beginLoad, failLoad, handleLoadContent, sftpProfiles, updateLoad]);
 
   const handleCancelLoad = useCallback(() => {
     const current = fileLoadRef.current;
@@ -606,7 +639,7 @@ export default function App() {
       regex.lastIndex = 0;
       let matched = false;
       if (isAllCols) {
-        matched = regex.test(log.rawText);
+        matched = regex.test(searchText(log));
       } else {
         for (const colKey of searchCols) {
           regex.lastIndex = 0;
@@ -641,6 +674,7 @@ export default function App() {
     const idx = Math.min(Math.max(0, currentMatchIndex), searchMatchLogIds.length - 1);
     return searchMatchLogIds[idx];
   }, [searchMatchLogIds, currentMatchIndex]);
+  const stackLog = useMemo(() => stackId === null ? undefined : logs.find((log) => log.id === stackId), [logs, stackId]);
 
   // 点击下一条匹配项：导航并选中
   const handleNextMatch = useCallback(() => {
@@ -713,13 +747,7 @@ export default function App() {
 
   // 导出 JSON
   const handleExportJSON = () => {
-    const exportData = filteredLogs.map((l) => ({
-      lineNumber: l.lineNumber,
-      success: l.success,
-      fields: l.fields || null,
-      rawText: l.rawText,
-    }));
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const blob = new Blob([jsonLogs(filteredLogs)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -730,48 +758,7 @@ export default function App() {
 
   // 导出 CSV
   const handleExportCSV = () => {
-    if (!selectedFormat.builtin) {
-      const headers = ['Line', ...selectedFormat.fields.map((field) => field.label), 'Status', 'RawText'];
-      const rows = filteredLogs.map((log) => [
-        log.lineNumber,
-        ...selectedFormat.fields.map((field) => csvCell(log.fields?.[field.id])),
-        log.success ? 'SUCCESS' : 'FAILED',
-        csvCell(log.rawText),
-      ].join(','));
-      const csvContent = '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `log_export_${selectedFormat.id}_${Date.now()}.csv`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      return;
-    }
-    const headers = ['Line', 'Timestamp', 'Level', 'RequestID', 'OperationDescription', 'FunctionName', 'ThreadID', 'MemoryAddress', 'Module', 'FileName', 'LineNumber', 'Status', 'RawText'];
-    const rows = filteredLogs.map((l) => {
-      if (l.success && l.fields) {
-        return [
-          l.lineNumber,
-          `"${l.fields.timestamp.replace(/"/g, '""')}"`,
-          `"${l.fields.level}"`,
-          `"${l.fields.requestId}"`,
-          `"${l.fields.operationDesc.replace(/"/g, '""')}"`,
-          `"${l.fields.functionName}"`,
-          `"${l.fields.threadId}"`,
-          `"${l.fields.memoryAddress}"`,
-          `"${l.fields.module}"`,
-          `"${l.fields.fileName}"`,
-          `"${l.fields.lineNumber}"`,
-          'SUCCESS',
-          `"${l.rawText.replace(/"/g, '""')}"`,
-        ].join(',');
-      } else {
-        return [l.lineNumber, '', '', '', '', '', '', '', '', '', '', 'FAILED', `"${l.rawText.replace(/"/g, '""')}"`].join(',');
-      }
-    });
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const csvContent = csvLogs(filteredLogs, selectedFormat);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -849,6 +836,7 @@ export default function App() {
         stats={stats}
         onSelectFile={handleSelectFile}
         onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
+        onOpenBrowse={() => openBrowseWindow()}
         onLoadSample={handleLoadSample}
         onClear={handleClear}
         isLoading={isBusy}
@@ -858,6 +846,8 @@ export default function App() {
         selectedFormatId={selectedFormat.id}
         configErrors={configErrors}
         onFormatChange={handleFormatChange}
+        stackEnabled={stackMode ?? selectedFormat.record.mode === RecordMode.Stack}
+        onStackChange={handleStackMode}
       />
 
       <FileLoadBar
@@ -872,6 +862,7 @@ export default function App() {
         <DropZone
           onFileSelected={handleFile}
           onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
+          onOpenBrowse={() => openBrowseWindow()}
           onLoadSample={handleLoadSample}
           isLoading={isBusy}
           theme={theme}
@@ -921,6 +912,7 @@ export default function App() {
 
           {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
           {selectedFormat.builtin ? <VirtualLogTable
+            onOpenStack={openStack}
             logs={filteredLogs}
             format={selectedFormat}
             density={density}
@@ -951,6 +943,7 @@ export default function App() {
             legacyBoldSelection={legacyBoldSelection}
             legacyHighlightStyle={legacyHighlightStyle}
           /> : <ConfigurableLogTable
+            onOpenStack={openStack}
             logs={filteredLogs}
             optionLogs={logs}
             format={selectedFormat}
@@ -976,6 +969,7 @@ export default function App() {
           />
         </div>
       )}
+      {stackLog?.stack ? <StackDetail log={stackLog} theme={theme} filter={filter} onClose={() => setStackId(null)} /> : null}
       <RemoteFileDialog
         open={remoteDialogOpen}
         profiles={sftpProfiles}
@@ -983,6 +977,18 @@ export default function App() {
         theme={theme}
         onClose={() => { if (!isBusy) setRemoteDialogOpen(false); }}
         onSubmit={handleRemoteLoad}
+        onServersChanged={refreshRemoteProfiles}
+        onBrowseWindow={(profileId, path) => openBrowseWindow(profileId, path)}
+      />
+      <RemoteBrowseWindow
+        visible={browseVisible}
+        request={browseRequest}
+        profiles={sftpProfiles}
+        busy={isBusy}
+        theme={theme}
+        onVisible={setBrowseVisible}
+        onOpenFile={handleRemoteLoad}
+        onConfigureServers={() => setRemoteDialogOpen(true)}
       />
     </div>
   );

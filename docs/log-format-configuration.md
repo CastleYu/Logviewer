@@ -540,3 +540,7 @@ npm run verify:config
 npm run lint
 npm run build
 ```
+
+## Python / Java 堆栈
+
+新增契约 1.2 的可选堆栈解析，配置及行为见 [堆栈解析说明](stack-parsing.md)。旧配置继续使用单行模式，也可在界面中临时开启“解析堆栈”。

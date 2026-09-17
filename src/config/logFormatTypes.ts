@@ -1,6 +1,9 @@
+import type { RecordMode } from './stackTypes';
+
 export enum ContractVersion {
   V1 = '1.0',
   V1_1 = '1.1',
+  V1_2 = '1.2',
 }
 
 export enum BuiltinFormatId {
@@ -115,7 +118,9 @@ export interface FormatMatchConfig {
 }
 
 export interface RecordConfig {
-  mode: 'line';
+  mode: `${RecordMode}`;
+  startPattern?: string;
+  stackField?: string;
   encoding?: string;
   skipEmpty?: boolean;
 }

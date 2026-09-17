@@ -3,6 +3,7 @@
  */
 
 import type { RuntimeFieldFilters } from './config/logFormatTypes';
+import type { StackTrace } from './config/stackTypes';
 
 export interface ParsedLogFields {
   timestamp: string;      // 1. 时间戳
@@ -19,16 +20,19 @@ export interface ParsedLogFields {
 }
 
 export interface LogEntry {
-  id: number;                     // 0-indexed 行序列号
-  lineNumber: number;             // 1-indexed 显示行号
-  success: boolean;               // 是否解析成功 (是否包含完整10个字段)
+  id: number;                     // 0-indexed 起始物理行序号，过滤与聚合后仍稳定
+  lineNumber: number;             // 1-indexed 起始物理行号
+  success: boolean;               // 日志记录解析状态；堆栈完整度单独记录
   fields?: ParsedLogFields;       // 解析成功的字段集合
-  rawText: string;                // 原始单行文本
+  rawText: string;                // 原始记录文本，保留堆栈内部换行和缩进
   parseErrorReason?: string;      // 解析失败原因（如括号不匹配、字段数不足）
   parserId?: string;
+  endLineNumber?: number;
+  stack?: StackTrace;
 }
 
 export interface LogStats {
+  physicalLineCount?: number;
   fileName: string;
   fileSize: number;               // 字节数
   totalCount: number;

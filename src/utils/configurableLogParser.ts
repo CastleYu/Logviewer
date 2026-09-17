@@ -15,6 +15,9 @@ import {
 } from '../config/logFormatTypes';
 import { LogEntry, LogStats, ParsedLogFields } from '../types';
 import { parseConfiguredDateTime } from './dateUtils';
+import { RecordMode, StackPattern } from '../config/stackTypes';
+import { splitRecords } from './logRecords';
+import { attachStack } from './recordEntries';
 
 export function createCanonicalFields(rawText: string): ParsedLogFields {
   return {
@@ -249,7 +252,28 @@ export function parseConfiguredLogContent(fullContent: string, fileName: string,
   const startTime = performance.now();
   const rawLines = fullContent.split(/\r?\n/);
   if (rawLines.at(-1) === '') rawLines.pop();
-  const logs = rawLines.map((line, index) => parseConfiguredLogLine(line, index, format));
+  const json = format.parsers.every((parser) => parser.kind === ParserKind.Json);
+  const pattern = format.record.startPattern ? new RegExp(format.record.startPattern) : StackPattern.header;
+  const hasJson = format.parsers.some((parser) => parser.kind === ParserKind.Json);
+  const isJson = (line: string) => {
+    if (!hasJson) return false;
+    const entry = parseConfiguredLogLine(line, 0, format);
+    return format.parsers.some((parser) => parser.kind === ParserKind.Json && parser.id === entry.parserId);
+  };
+  const isHead = (line: string) => pattern.test(line) || isJson(line);
+  const message = (line: string) => {
+    const fields = parseConfiguredLogLine(line, 0, format).fields;
+    const body = format.record.stackField ? fields?.[format.record.stackField] : fields?.operationDesc;
+    return typeof body === 'string' ? body : line;
+  };
+  const records = splitRecords(fullContent, json ? RecordMode.Line : format.record.mode, isHead, message, isJson);
+  const logs = records.map((item) => {
+    // Bracket formats can wrap the entire multiline message before their tail fields.
+    const whole = item.end > item.start && item.raw.trimEnd().endsWith(']')
+      ? format.parsers.filter((parser) => parser.kind === ParserKind.Bracketed || parser.kind === ParserKind.AnchoredBracketed)
+        .some((parser) => { const fields = parseStage(item.raw, parser); return fields && finalizeFields(fields, format, item.raw); }) : false;
+    return attachStack(parseConfiguredLogLine(whole ? item.raw : item.head, item.start - 1, format), item, format.record, isHead(item.head), format, whole);
+  });
   const levelCounts: Record<string, number> = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, OTHER: 0 };
   let successCount = 0;
   for (const log of logs) {
@@ -261,6 +285,7 @@ export function parseConfiguredLogContent(fullContent: string, fileName: string,
   return {
     logs,
     stats: {
+      physicalLineCount: rawLines.length,
       fileName,
       fileSize,
       totalCount: logs.length,

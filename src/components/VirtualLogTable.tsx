@@ -1,5 +1,7 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity, ColumnFilterKey, FilterValue, LogLevel } from '../types';
+import { StackCell } from './StackCell';
+import { stackSummary, frameCount } from '../utils/stackParser';
 import { HighlightedText } from './HighlightedText';
 import { SourceMenuItem } from './SourceNavigation';
 import { sourceField } from '../utils/sourceUtils';
@@ -21,6 +23,7 @@ import {
 
 interface VirtualLogTableProps {
   logs: LogEntry[];
+  onOpenStack: (log: LogEntry) => void;
   format: LogFormatConfig;
   density: DisplayDensity;
   columnVisibility: ColumnVisibility;
@@ -140,6 +143,7 @@ function isFilterActive(column: ColumnFilterKey, filter: FilterOptions): boolean
 
 export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   logs,
+  onOpenStack,
   format,
   density,
   columnVisibility,
@@ -364,7 +368,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
       if (measured !== undefined) return measured;
 
       const text = entry.success
-        ? (entry.fields?.operationDesc || entry.rawText)
+        ? (entry.stack ? stackSummary(entry.stack) : entry.fields?.operationDesc || entry.rawText)
         : entry.rawText;
 
       if (!text) return padY + LINE_HEIGHT;
@@ -549,9 +553,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     const targetVal = jumpToLine.line;
     if (!targetVal || logs.length === 0) return;
 
-    let matchIdx = -1;
+    let matchIdx = logs.findIndex((log) => log.stack && log.lineNumber <= targetVal && (log.endLineNumber ?? log.lineNumber) >= targetVal);
     // 1. 优先按 1-based 当前视图序号精准定位
-    if (targetVal >= 1 && targetVal <= logs.length) {
+    if (matchIdx >= 0) {
+      onOpenStack(logs[matchIdx]);
+    } else if (targetVal >= 1 && targetVal <= logs.length) {
       matchIdx = targetVal - 1;
     } else {
       // 2. 超出视图序列时按日志原始行号 entry.lineNumber 查找
@@ -1425,7 +1431,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                       data-source-field="index" style={{ width: `${colWidths.index}px` }}
                       className={`shrink-0 px-2 text-center text-slate-400 text-[10px] truncate border-r font-mono flex items-center justify-center ${borderClass}`}
                     >
-                      {entry.lineNumber}
+                      <StackCell log={entry} onOpen={onOpenStack} />
                     </div>
                   )}
 
@@ -1522,8 +1528,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                           className={`flex-1 shrink-0 px-2.5 font-mono border-r select-text flex items-center ${borderClass} ${textDisplayClass}`}
                           title={entry.fields?.operationDesc}
                         >
+                          {entry.stack ? <button type="button" onClick={(event) => { event.stopPropagation(); onOpenStack(entry); }} className="min-h-6 min-w-0 text-left underline decoration-dotted underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500" aria-label={`查看堆栈：${stackSummary(entry.stack)}`}>
+                            <HighlightedText text={`${stackSummary(entry.stack)} · ${frameCount(entry.stack)} 帧`} searchHighlight={searchKeyword} searchMatchCase={searchMatchCase} searchIsRegex={searchIsRegex} theme={theme} />
+                          </button> :
                           <HighlightedText
-                            text={entry.fields?.operationDesc || ''}
+                            text={entry.stack ? `${stackSummary(entry.stack)} · ${frameCount(entry.stack)} 帧` : entry.fields?.operationDesc || ''}
                             highlight={highlightKeyword}
                             matchCase={highlightMatchCase ?? matchCase}
                             isRegex={highlightIsRegex}
@@ -1534,6 +1543,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                             theme={theme}
                             legacyHighlightStyle={legacyHighlightStyle}
                           />
+                          }
                         </div>
                       )}
 

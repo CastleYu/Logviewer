@@ -13,6 +13,7 @@ import {
   Sparkles, 
   Trash2, 
   Cpu,
+  FolderOpen,
   Sun,
   Moon,
   Braces,
@@ -23,6 +24,7 @@ interface HeaderDashboardProps {
   stats: LogStats | null;
   onSelectFile: () => void;
   onSelectRemote: () => void;
+  onOpenBrowse?: () => void;
   onLoadSample: (count: number) => void;
   onClear: () => void;
   isLoading: boolean;
@@ -32,12 +34,15 @@ interface HeaderDashboardProps {
   selectedFormatId: string;
   configErrors: ConfigError[];
   onFormatChange: (formatId: string) => void;
+  stackEnabled: boolean;
+  onStackChange: (enabled: boolean) => void;
 }
 
 export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
   stats,
   onSelectFile,
   onSelectRemote,
+  onOpenBrowse,
   onLoadSample,
   onClear,
   isLoading,
@@ -47,6 +52,8 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
   selectedFormatId,
   configErrors,
   onFormatChange,
+  stackEnabled,
+  onStackChange,
 }) => {
   const isLight = theme === 'light';
 
@@ -121,8 +128,8 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
           }`}>
             <div className="flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="text-[11px] text-slate-400">行数:</span>
-              <strong className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>{stats.totalCount.toLocaleString()}</strong>
+              <span className="text-[11px] text-slate-400">记录:</span>
+              <strong className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>{stats.totalCount.toLocaleString()}</strong><span className="text-[11px] text-slate-500">/ {(stats.physicalLineCount ?? stats.totalCount).toLocaleString()} 行</span>
             </div>
 
             <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
@@ -171,6 +178,7 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
             </button>
           )}
 
+          <label className="flex min-h-8 items-center gap-1.5 text-xs"><input type="checkbox" checked={stackEnabled} disabled={isLoading} onChange={(event) => onStackChange(event.target.checked)} className="accent-indigo-500" />解析堆栈</label>
           <button
             onClick={onSelectFile}
             disabled={isLoading}
@@ -194,6 +202,22 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
             <Server className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">远程文件</span>
           </button>
+
+          {onOpenBrowse ? (
+            <button
+              onClick={onOpenBrowse}
+              disabled={isLoading}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-45 ${
+                isLight
+                  ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+                  : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
+              }`}
+              title="打开远程目录浏览窗口"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">远程浏览</span>
+            </button>
+          ) : null}
 
           <div className="relative group">
             <button

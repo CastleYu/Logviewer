@@ -16,6 +16,7 @@ import {
   ParserKind,
 } from '../config/logFormatTypes';
 import { runFormatTest } from './configurableLogParser';
+import { RecordMode } from '../config/stackTypes';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -51,6 +52,19 @@ export function validateFormat(format: LogFormatConfig, index: number): ConfigEr
     return errors;
   }
   const fieldIds = new Set<string>();
+  if (!format.record || !Object.values(RecordMode).includes(format.record.mode as RecordMode)) {
+    pushError(errors, ConfigErrorCode.InvalidRoot, `${path}.record.mode`, 'record.mode 必须为 line 或 stack');
+  }
+  if (format.record?.startPattern !== undefined) {
+    try {
+      if (typeof format.record.startPattern !== 'string' || !format.record.startPattern.startsWith('^')) throw new Error();
+      const pattern = new RegExp(format.record.startPattern);
+      if (pattern.test('')) throw new Error();
+    } catch { pushError(errors, ConfigErrorCode.InvalidRoot, `${path}.record.startPattern`, '记录起始正则必须有效、以 ^ 开头且不能匹配空串'); }
+  }
+  if (format.record?.stackField !== undefined && !format.fields.some((field) => field.id === format.record.stackField && field.type === FieldType.String)) {
+    pushError(errors, ConfigErrorCode.ParserBindingUnknown, `${path}.record.stackField`, '堆栈来源必须是已注册的 string 字段');
+  }
   const roles = new Set<FieldRole>();
   for (let fieldIndex = 0; fieldIndex < format.fields.length; fieldIndex++) {
     const field = format.fields[fieldIndex];
@@ -147,8 +161,8 @@ export function validateLogViewerConfig(value: unknown): { config: LogViewerConf
     pushError(errors, ConfigErrorCode.InvalidRoot, '$', '根对象必须包含 formats 数组');
     return { config: null, errors };
   }
-  if (value.contractVersion !== ContractVersion.V1 && value.contractVersion !== ContractVersion.V1_1) {
-    pushError(errors, ConfigErrorCode.VersionUnsupported, '$.contractVersion', `仅支持契约版本 ${ContractVersion.V1} 或 ${ContractVersion.V1_1}`);
+  if (!Object.values(ContractVersion).includes(value.contractVersion as ContractVersion)) {
+    pushError(errors, ConfigErrorCode.VersionUnsupported, '$.contractVersion', '仅支持契约版本 1.0、1.1 或 1.2');
     return { config: null, errors };
   }
   const config = value as unknown as LogViewerConfig;
@@ -160,6 +174,9 @@ export function validateLogViewerConfig(value: unknown): { config: LogViewerConf
       continue;
     }
     const format = rawFormat as unknown as LogFormatConfig;
+    if (value.contractVersion !== ContractVersion.V1_2 && (format.record?.mode === RecordMode.Stack || format.record?.startPattern !== undefined || format.record?.stackField !== undefined)) {
+      pushError(errors, ConfigErrorCode.VersionUnsupported, `formats[${index}].record`, '堆栈配置需要 contractVersion 1.2');
+    }
     if (typeof format.id !== 'string' || !format.id) {
       pushError(errors, ConfigErrorCode.InvalidRoot, `formats[${index}].id`, '格式 id 必须是非空字符串');
       continue;
