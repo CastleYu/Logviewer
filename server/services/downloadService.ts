@@ -4,25 +4,28 @@ import path from 'node:path';
 import SftpClient from 'ssh2-sftp-client';
 import { ApiErrorCode, DownloadStatus, ServerValue } from '../config/constants';
 import type { DownloadTask, DownloadTaskView, SftpProfile } from '../models/sftpModels';
+import { RemotePath } from './remotePath';
+import { ServiceError } from './serviceError';
+import { downloadSmbFile } from './smbDownload';
 
-export class ServiceError extends Error {
-  constructor(public readonly code: ApiErrorCode, message: string, public readonly status: number) {
-    super(message);
-  }
-}
+export { ServiceError };
 
 export class DownloadService {
   private readonly tasks = new Map<string, DownloadTask>();
   private readonly cacheDir: string;
 
-  constructor(private readonly profile: SftpProfile | null, rootDir: string) {
+  constructor(
+    private readonly profile: SftpProfile | null,
+    rootDir: string,
+    private readonly lookup: ((id: string) => SftpProfile | null) | null = null,
+  ) {
     this.cacheDir = path.resolve(rootDir, ServerValue.CacheDir);
     fs.mkdirSync(this.cacheDir, { recursive: true });
   }
 
   create(profileId: string, remotePath: string): DownloadTaskView {
     const profile = this.requireProfile(profileId);
-    const safePath = this.remotePath(remotePath, profile.root);
+    const safePath = this.remotePath(remotePath, RemotePath.rootsOf(profile.root, profile.roots));
     const id = crypto.randomUUID();
     const fileName = path.posix.basename(safePath);
     const localPath = path.join(this.cacheDir, `${id}-${fileName}`);
@@ -39,7 +42,7 @@ export class DownloadService {
       cancelled: false,
     };
     this.tasks.set(id, task);
-    void this.run(task, profile);
+    void (profile.protocol === 'smb' ? downloadSmbFile(task, profile) : this.run(task, profile));
     return this.view(task);
   }
 
@@ -94,7 +97,7 @@ export class DownloadService {
       if (!exists) throw new ServiceError(ApiErrorCode.FileNotFound, '远程文件不存在', 404);
       if (exists !== '-' && exists !== 'l') throw new ServiceError(ApiErrorCode.NotAFile, '指定路径不是普通文件', 400);
       const resolvedPath = await client.realPath(task.remotePath);
-      this.remotePath(resolvedPath, profile.root);
+      this.remotePath(resolvedPath, RemotePath.rootsOf(profile.root, profile.roots));
       const stat = await client.stat(task.remotePath);
       task.totalBytes = stat.size;
       if (stat.size > profile.maxBytes) {
@@ -126,26 +129,14 @@ export class DownloadService {
   }
 
   private requireProfile(profileId: string): SftpProfile {
-    if (!this.profile || profileId !== this.profile.id) {
-      throw new ServiceError(ApiErrorCode.ServerUnavailable, 'SFTP 服务器尚未配置', 503);
-    }
-    return this.profile;
+    if (this.profile && profileId === this.profile.id) return this.profile;
+    const registered = this.lookup?.(profileId) || null;
+    if (registered) return registered;
+    throw new ServiceError(ApiErrorCode.ServerUnavailable, 'SFTP 服务器尚未配置', 503);
   }
 
-  private remotePath(value: string, root: string): string {
-    if (!value || typeof value !== 'string' || value.includes('\0')) {
-      throw new ServiceError(ApiErrorCode.InvalidRequest, '请输入有效的远程文件路径', 400);
-    }
-    const normalized = path.posix.normalize(value.trim());
-    if (!normalized.startsWith('/')) {
-      throw new ServiceError(ApiErrorCode.InvalidRequest, '远程文件路径必须是绝对路径', 400);
-    }
-    const safeRoot = path.posix.normalize(root);
-    const prefix = safeRoot === '/' ? '/' : `${safeRoot.replace(/\/$/, '')}/`;
-    if (normalized !== safeRoot && !normalized.startsWith(prefix)) {
-      throw new ServiceError(ApiErrorCode.PathDenied, `远程路径必须位于 ${safeRoot} 下`, 403);
-    }
-    return normalized;
+  private remotePath(value: string, roots: string[]): string {
+    return RemotePath.assertAllowed(value, roots);
   }
 
   private requireTask(id: string): DownloadTask {

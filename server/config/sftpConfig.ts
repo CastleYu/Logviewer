@@ -26,11 +26,15 @@ export class SftpConfig {
   }
 
   static public(profile: SftpProfile | null): PublicSftpProfile[] {
+    const root = profile?.root || ServerValue.DefaultRoot;
     return [{
       id: ServerValue.ProfileId,
       name: ServerValue.ProfileName,
-      root: profile?.root || ServerValue.DefaultRoot,
+      root,
       ready: Boolean(profile),
+      roots: [root],
+      source: 'env',
+      protocol: 'sftp',
     }];
   }
 

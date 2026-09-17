@@ -9,6 +9,7 @@ export enum DownloadStatus {
 export enum ApiErrorCode {
   InvalidRequest = 'INVALID_REQUEST',
   ServerUnavailable = 'SERVER_UNAVAILABLE',
+  ServerNotFound = 'SERVER_NOT_FOUND',
   PathDenied = 'PATH_DENIED',
   FileNotFound = 'FILE_NOT_FOUND',
   NotAFile = 'NOT_A_FILE',
@@ -21,6 +22,9 @@ export enum ApiErrorCode {
 export class ApiPath {
   static readonly Base = '/api';
   static readonly Profiles = '/api/sftp/profiles';
+  static readonly Servers = '/api/sftp/servers';
+  static readonly ServerProbe = '/api/sftp/servers/probe';
+  static readonly List = '/api/sftp/list';
   static readonly Downloads = '/api/sftp/downloads';
   static readonly Health = '/api/health';
 }
@@ -45,6 +49,7 @@ export class ServerValue {
   static readonly ProfileId = 'default';
   static readonly ProfileName = '默认 SFTP 服务器';
   static readonly DefaultPort = 22;
+  static readonly DefaultSmbPort = 445;
   static readonly DefaultListenPort = 3000;
   static readonly DefaultRoot = '/';
   static readonly DefaultMaxBytes = 512 * 1024 * 1024;
@@ -52,5 +57,6 @@ export class ServerValue {
   static readonly ReadyTimeoutMs = 20_000;
   static readonly KeepaliveMs = 10_000;
   static readonly CacheDir = '.logviewer-cache';
+  static readonly RegistryFile = '.logviewer-remotes.json';
   static readonly PartSuffix = '.part';
 }

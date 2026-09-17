@@ -1,10 +1,53 @@
-import { DownloadTaskView, RemoteApiPath, SftpProfileView } from '../config/fileLoadTypes';
+import { DownloadTaskView, ProbeResult, RemoteApiPath, RemoteDirList, RemoteServerDraft, RemoteServerRecord, SftpProfileView } from '../config/fileLoadTypes';
 
 export class RemoteFileApi {
   static async profiles(): Promise<SftpProfileView[]> {
     const response = await fetch(RemoteApiPath.Profiles);
     const value = await this.json<{ profiles: SftpProfileView[] }>(response);
     return value.profiles;
+  }
+
+  static async servers(): Promise<RemoteServerRecord[]> {
+    const response = await fetch(RemoteApiPath.Servers);
+    const value = await this.json<{ servers: RemoteServerRecord[] }>(response);
+    return value.servers;
+  }
+
+  static async createServer(draft: RemoteServerDraft): Promise<RemoteServerRecord> {
+    const response = await fetch(RemoteApiPath.Servers, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    const value = await this.json<{ server: RemoteServerRecord }>(response);
+    return value.server;
+  }
+
+  static async updateServer(id: string, draft: RemoteServerDraft): Promise<RemoteServerRecord> {
+    const response = await fetch(RemoteApiPath.server(id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    const value = await this.json<{ server: RemoteServerRecord }>(response);
+    return value.server;
+  }
+
+  static async deleteServer(id: string): Promise<void> {
+    await this.json(await fetch(RemoteApiPath.server(id), { method: 'DELETE' }));
+  }
+
+  static async probeServer(draft: RemoteServerDraft): Promise<ProbeResult> {
+    const response = await fetch(RemoteApiPath.ServerProbe, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    return this.json<ProbeResult>(response);
+  }
+
+  static async list(profileId: string, remotePath: string): Promise<RemoteDirList> {
+    return this.json<RemoteDirList>(await fetch(RemoteApiPath.list(profileId, remotePath)));
   }
 
   static async create(profileId: string, remotePath: string): Promise<DownloadTaskView> {

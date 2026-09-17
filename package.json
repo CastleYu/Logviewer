@@ -7,12 +7,15 @@
     "dev": "tsx server/main.ts",
     "build": "vite build",
     "verify:config": "tsx scripts/verify-log-contract.ts",
+    "verify:stack": "tsx scripts/verify-stack.ts",
+    "verify:sftp-browse": "tsx scripts/verify-sftp-browse.ts",
     "preview": "tsx server/main.ts --production",
     "start": "tsx server/main.ts --production",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@awo00/smb2": "^1.1.1",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

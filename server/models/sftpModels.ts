@@ -10,8 +10,12 @@ export interface SftpProfile {
   password?: string;
   privateKey?: string;
   root: string;
+  roots?: string[];
   fingerprint?: string;
   maxBytes: number;
+  protocol?: 'sftp' | 'smb';
+  domain?: string;
+  share?: string;
 }
 
 export interface PublicSftpProfile {
@@ -19,6 +23,9 @@ export interface PublicSftpProfile {
   name: string;
   root: string;
   ready: boolean;
+  roots?: string[];
+  source?: 'env' | 'registry';
+  protocol?: 'sftp' | 'smb';
 }
 
 export interface DownloadTask {

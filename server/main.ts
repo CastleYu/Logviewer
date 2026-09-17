@@ -9,6 +9,7 @@ import { localAccess } from './routes/localAccess';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { EnvKey, ServerValue } from './config/constants';
+import { RemoteRegistry } from './config/remoteRegistry';
 import { SftpConfig } from './config/sftpConfig';
 import { registerErrorRoute, registerSftpRoutes } from './routes/sftpRoutes';
 import { DownloadService } from './services/downloadService';
@@ -26,7 +27,8 @@ const sources = new SourceService(path.join(rootDir, SourceConst.Store));
 await sources.init();
 registerSourceRoutes(app, sources);
 const sftpProfile = SftpConfig.load();
-registerSftpRoutes(app, new DownloadService(sftpProfile, rootDir), sftpProfile);
+const registry = new RemoteRegistry(path.join(rootDir, ServerValue.RegistryFile));
+registerSftpRoutes(app, new DownloadService(sftpProfile, rootDir, (id) => registry.toProfile(id)), sftpProfile, registry);
 
 if (production) {
   app.use(express.static(path.join(rootDir, 'dist')));

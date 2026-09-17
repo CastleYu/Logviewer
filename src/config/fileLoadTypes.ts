@@ -30,6 +30,7 @@ export interface FileLoadState {
   totalBytes: number;
   taskId?: string;
   message?: string;
+  remoteKind?: 'sftp' | 'smb';
 }
 
 export interface SftpProfileView {
@@ -37,6 +38,46 @@ export interface SftpProfileView {
   name: string;
   root: string;
   ready: boolean;
+  roots?: string[];
+  source?: 'env' | 'registry';
+  protocol?: 'sftp' | 'smb';
+}
+
+export interface RemoteServerRecord {
+  id: string;
+  protocol: 'sftp' | 'smb';
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  paths: string[];
+  domain?: string;
+  share?: string;
+}
+
+export interface RemoteServerDraft {
+  protocol: 'sftp' | 'smb';
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  paths: string[];
+  domain?: string;
+  share?: string;
+}
+
+export interface ProbePathResult {
+  path: string;
+  ok: boolean;
+  message: string;
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  message: string;
+  paths: ProbePathResult[];
 }
 
 export interface DownloadTaskView {
@@ -58,8 +99,23 @@ export class LoadState {
   }
 }
 
+export interface RemoteDirEntry {
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  modifyTime?: number;
+}
+
+export interface RemoteDirList {
+  path: string;
+  entries: RemoteDirEntry[];
+}
+
 export class RemoteApiPath {
   static readonly Profiles = '/api/sftp/profiles';
+  static readonly Servers = '/api/sftp/servers';
+  static readonly ServerProbe = '/api/sftp/servers/probe';
+  static readonly List = '/api/sftp/list';
   static readonly Downloads = '/api/sftp/downloads';
 
   static task(id: string): string {
@@ -68,5 +124,14 @@ export class RemoteApiPath {
 
   static content(id: string): string {
     return `${this.task(id)}/content`;
+  }
+
+  static server(id: string): string {
+    return `${this.Servers}/${encodeURIComponent(id)}`;
+  }
+
+  static list(profileId: string, remotePath: string): string {
+    const params = new URLSearchParams({ profileId, path: remotePath });
+    return `${this.List}?${params.toString()}`;
   }
 }

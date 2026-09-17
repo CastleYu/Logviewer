@@ -20,7 +20,7 @@ export const FileLoadBar: React.FC<FileLoadBarProps> = ({ state, theme, onCancel
   const label = state.phase === LoadPhase.Error
     ? state.message || '文件加载失败'
     : state.phase === LoadPhase.Downloading
-      ? '正在从 SFTP 下载'
+      ? (state.remoteKind === 'smb' ? '正在从 SMB 下载' : '正在从 SFTP 下载')
       : state.phase === LoadPhase.Parsing
         ? '正在解析日志'
         : '正在读取文件';
