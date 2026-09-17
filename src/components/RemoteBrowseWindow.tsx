@@ -10,8 +10,8 @@ import {
   createBrowseSession,
   hideBrowseWindow,
   moveBrowseWindow,
-  needsRemoteList,
   rememberListing,
+  shouldFetchBrowseListing,
   setBrowsePath,
   setBrowseProfile,
   showBrowseWindow,
@@ -109,12 +109,13 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
 
   useEffect(() => {
     const current = sessionRef.current;
-    if (!profile?.ready || !profile.id) return;
-    if (!needsRemoteList({ ...current, profileId: profile.id }, currentPath)) return;
+    if (!shouldFetchBrowseListing(current, currentPath)) return;
+    const listedProfile = profiles.find((item) => item.id === current.profileId);
+    if (!listedProfile?.ready) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    RemoteFileApi.list(profile.id, currentPath)
+    RemoteFileApi.list(current.profileId, currentPath)
       .then((listed) => {
         if (cancelled) return;
         apply(rememberListing(sessionRef.current, listed));
@@ -127,7 +128,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [currentPath, profile?.id, profile?.ready, refreshKey, session.profileId]);
+  }, [currentPath, profiles, refreshKey, session.profileId]);
 
   const go = (pathValue: string) => {
     setSelected(null);

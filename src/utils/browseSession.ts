@@ -46,6 +46,10 @@ export function needsRemoteList(session: BrowseSession, requestedPath = session.
   return !session.listing || session.listing.path !== path;
 }
 
+export function shouldFetchBrowseListing(session: BrowseSession, requestedPath = session.path): boolean {
+  return needsRemoteList(session, requestedPath);
+}
+
 export function rememberListing(session: BrowseSession, listing: BrowseListing): BrowseSession {
   return {
     ...session,

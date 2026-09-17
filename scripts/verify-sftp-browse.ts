@@ -14,6 +14,8 @@ import {
   hideBrowseWindow,
   needsRemoteList,
   rememberListing,
+  setBrowseProfile,
+  shouldFetchBrowseListing,
   showBrowseWindow,
 } from '../src/utils/browseSession';
 
@@ -87,6 +89,14 @@ function verifyCommands(): void {
 }
 
 function verifySession(): void {
+  const idle = createBrowseSession('', '/');
+  assert.equal(idle.profileId, '');
+  assert.equal(shouldFetchBrowseListing(idle), false, 'always-mounted window with empty profileId must not list');
+  assert.equal(needsRemoteList(idle), false);
+  const assigned = setBrowseProfile(idle, 'sftp-1', '/var/log');
+  assert.equal(assigned.profileId, 'sftp-1');
+  assert.equal(shouldFetchBrowseListing(assigned), true, 'list only after setBrowseProfile has a real id');
+
   let session = createBrowseSession('sftp-1', '/var/log');
   assert.equal(needsRemoteList(session), true);
   session = rememberListing(session, { path: '/var/log', entries: listing });
@@ -112,7 +122,9 @@ function verifyWindowSource(): void {
   assert.match(windowSrc, /onPointerDown/);
   assert.match(windowSrc, /aria-label="隐藏目录窗口"/);
   assert.match(windowSrc, /aria-label="显示目录窗口"/);
-  assert.match(windowSrc, /needsRemoteList/);
+  assert.match(windowSrc, /shouldFetchBrowseListing\(current/);
+  assert.doesNotMatch(windowSrc, /profileId:\s*profile\.id/);
+  assert.match(windowSrc, /RemoteFileApi\.list\(current\.profileId/);
   const explorerSrc = readFileSync(path.resolve('src/components/RemoteFileExplorer.tsx'), 'utf8');
   assert.match(explorerSrc, /onDoubleClick/);
   assert.match(explorerSrc, /onContextMenu/);
