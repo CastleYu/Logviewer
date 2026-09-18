@@ -8,7 +8,7 @@ import { RemoteRegistry } from '../server/config/remoteRegistry';
 import { registerErrorRoute, registerSftpRoutes } from '../server/routes/sftpRoutes';
 import { DownloadService } from '../server/services/downloadService';
 import { applyBrowseCommand, applyListingAction, completeBrowseInput, listingAction, resolveCd } from '../src/utils/browseCommands';
-import { logDirectory } from '../src/utils/browsePath';
+import { filterServerProfiles, parseExecOutput, shQuote, wrapRemoteCommand } from '../src/utils/remoteExec';
 import {
   createBrowseSession,
   hideBrowseWindow,
@@ -54,9 +54,24 @@ function verifyCommands(): void {
   assert.equal(resolved.ok, false);
 
   const logJump = applyBrowseCommand('log', '/opt/app/log', roots, listing);
-  assert.equal(logJump.kind, 'enter');
-  assert.equal(logJump.path, logDirectory(roots));
-  assert.equal(logJump.path, '/var/log');
+  assert.equal(logJump.kind, 'exec');
+  if (logJump.kind === 'exec') assert.equal(logJump.command, 'log');
+  const pwd = applyBrowseCommand('pwd', '/var/log', roots, listing);
+  assert.equal(pwd.kind, 'exec');
+  if (pwd.kind === 'exec') assert.equal(pwd.command, 'pwd');
+  const wrapped = wrapRemoteCommand('/var/log', 'echo hi');
+  assert.match(wrapped, /bash --login -c/);
+  assert.match(wrapped, /\/var\/log/);
+  assert.match(wrapped, /echo hi/);
+  assert.equal(shQuote("a'b"), `'a'\\''b'`);
+  const parsed = parseExecOutput("hello\n__LV_CWD__/tmp/log\n");
+  assert.equal(parsed.text, 'hello');
+  assert.equal(parsed.cwd, '/tmp/log');
+  const names = filterServerProfiles(
+    [{ id: 'a', name: 'prod-sftp', protocol: 'sftp' as const }, { id: 'b', name: 'nas', protocol: 'smb' as const }],
+    'smb',
+  );
+  assert.deepEqual(names.map((item) => item.id), ['b']);
 
   const unique = completeBrowseInput('cd oth', listing);
   assert.equal(unique.input, 'cd other.log');
@@ -125,6 +140,11 @@ function verifyWindowSource(): void {
   assert.match(windowSrc, /shouldFetchBrowseListing\(current/);
   assert.doesNotMatch(windowSrc, /profileId:\s*profile\.id/);
   assert.match(windowSrc, /RemoteFileApi\.list\(current\.profileId/);
+  assert.match(windowSrc, /RemoteFileApi\.exec/);
+  assert.match(windowSrc, /ServerPicker/);
+  const pickerSrc = readFileSync(path.resolve('src/components/ServerPicker.tsx'), 'utf8');
+  assert.match(pickerSrc, /搜索服务器/);
+  assert.match(pickerSrc, /filterServerProfiles/);
   const explorerSrc = readFileSync(path.resolve('src/components/RemoteFileExplorer.tsx'), 'utf8');
   assert.match(explorerSrc, /onDoubleClick/);
   assert.match(explorerSrc, /onContextMenu/);
@@ -226,6 +246,12 @@ async function verifyRegistryAndHttp(): Promise<void> {
       const seen = after.body.profiles.find((item: { id: string }) => item.id === createdHttp.body.server.id);
       assert.equal(seen.name, 'frontend-edit');
       assert.deepEqual(seen.roots, ['/var/log', '/home/log']);
+      const execDenied = await json(`${base}/api/sftp/exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId: createdHttp.body.server.id, path: '/var/log', command: '' }),
+      });
+      assert.equal(execDenied.status, 400);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -239,7 +265,7 @@ async function verify(): Promise<void> {
   verifySession();
   verifyWindowSource();
   await verifyRegistryAndHttp();
-  console.log('PASS: frontend SFTP registry persists as browse profiles; cd/log/tab/root-jail; hide/show keeps path without a new list; file open is distinct from directory enter');
+  console.log('PASS: frontend SFTP registry persists as browse profiles; cd/tab/root-jail; remote exec wrap/parse; hide/show keeps path without a new list; file open is distinct from directory enter');
 }
 
 await verify();

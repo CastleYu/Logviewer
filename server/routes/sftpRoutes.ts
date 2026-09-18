@@ -8,6 +8,7 @@ import type { SftpProfile } from '../models/sftpModels';
 import { DownloadService, ServiceError } from '../services/downloadService';
 import { listSftpDir } from '../services/sftpList';
 import { listSmbDir } from '../services/smbList';
+import { execSftpCommand } from '../services/sftpExec';
 import { probeSftp } from '../services/sftpProbe';
 import { probeSmb } from '../services/smbProbe';
 
@@ -58,6 +59,17 @@ export function registerSftpRoutes(
       const remotePath = typeof request.query.path === 'string' ? request.query.path : '';
       const resolved = resolveListedProfile(profile, registry, profileId);
       response.json(resolved.protocol === 'smb' ? await listSmbDir(resolved, remotePath) : await listSftpDir(resolved, remotePath));
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.post(ApiPath.Exec, async (request, response, next) => {
+    try {
+      const profileId = typeof request.body?.profileId === 'string' ? request.body.profileId : '';
+      const remotePath = typeof request.body?.path === 'string' ? request.body.path : '';
+      const command = typeof request.body?.command === 'string' ? request.body.command : '';
+      const resolved = resolveListedProfile(profile, registry, profileId);
+      response.json(await execSftpCommand(resolved, remotePath, command));
     } catch (error) {
       next(error);
     }

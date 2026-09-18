@@ -4,7 +4,9 @@ import { RemoteDirEntry, SftpProfileView } from '../config/fileLoadTypes';
 import { ThemeMode } from '../types';
 import { RemoteFileApi } from '../services/remoteFileApi';
 import { applyBrowseCommand, completeBrowseInput } from '../utils/browseCommands';
-import { allowedRoots, logDirectory, parentRemotePath, pathCrumbs } from '../utils/browsePath';
+import { allowedRoots, isAllowedPath, logDirectory, parentRemotePath, pathCrumbs } from '../utils/browsePath';
+import { RemoteFileExplorer } from './RemoteFileExplorer';
+import { ServerPicker } from './ServerPicker';
 import {
   BrowseSession,
   createBrowseSession,
@@ -16,7 +18,6 @@ import {
   setBrowseProfile,
   showBrowseWindow,
 } from '../utils/browseSession';
-import { RemoteFileExplorer } from './RemoteFileExplorer';
 
 export interface BrowseOpenRequest {
   nonce: number;
@@ -60,6 +61,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [output, setOutput] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -142,6 +144,37 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
     setRefreshKey((value) => value + 1);
   };
 
+  const runRemote = async (commandText: string) => {
+    if (!profile?.ready) {
+      setStatus('请先选择已配置的服务器');
+      return;
+    }
+    if (profile.protocol === 'smb') {
+      if (commandText.trim() === 'log') {
+        go(logDirectory(roots));
+        setStatus(null);
+        return;
+      }
+      setStatus('SMB 不支持远程命令，请使用 cd / ls / open');
+      return;
+    }
+    setStatus('正在执行…');
+    try {
+      const result = await RemoteFileApi.exec(profile.id, currentPath, commandText);
+      setOutput(result.text || (result.ok ? '' : `退出码 ${result.code ?? '?'}`));
+      setStatus(result.ok ? null : `退出码 ${result.code ?? '失败'}`);
+      if (result.cwd && result.cwd !== currentPath) {
+        if (isAllowedPath(result.cwd, roots)) go(result.cwd);
+        else setStatus(`工作目录已变为 ${result.cwd}（超出允许的浏览范围，列表未切换）`);
+      } else if (result.ok) {
+        refresh();
+      }
+    } catch (cause) {
+      setOutput('');
+      setStatus(cause instanceof Error ? cause.message : '远程命令执行失败');
+    }
+  };
+
   const runCommand = (value: string) => {
     const action = applyBrowseCommand(value, currentPath, roots, entries);
     setCandidates([]);
@@ -155,13 +188,20 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
     }
     if (action.kind === 'refresh') {
       setCommand('');
+      setOutput('');
       refresh();
       return;
     }
     if (action.kind === 'enter') {
       setCommand('');
+      setOutput('');
       setStatus(null);
       go(action.path);
+      return;
+    }
+    if (action.kind === 'exec') {
+      setCommand('');
+      void runRemote(action.command);
       return;
     }
     if (!profile?.ready) {
@@ -169,6 +209,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
       return;
     }
     setCommand('');
+    setOutput('');
     setStatus(null);
     onOpenFile(profile.id, action.path);
   };
@@ -263,20 +304,13 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
         </header>
 
         <div className={`flex shrink-0 items-center gap-1.5 border-b px-2.5 py-1.5 ${light ? 'border-slate-200' : 'border-slate-800'}`}>
-          <select
-            aria-label="浏览服务器"
+          <ServerPicker
+            profiles={profiles}
             value={profile?.id || ''}
-            onChange={(event) => {
-              const next = profiles.find((item) => item.id === event.target.value);
-              if (!next) return;
-              apply(setBrowseProfile(sessionRef.current, next.id, logDirectory(profileRoots(next))));
-            }}
-            className={`h-8 max-w-[160px] rounded-md border px-2 text-[11px] outline-none ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-950'}`}
-          >
-            {profiles.map((item) => (
-              <option key={item.id} value={item.id}>{item.name}{item.protocol === 'smb' ? ' [SMB]' : ''}{item.ready ? '' : '（未配置）'}</option>
-            ))}
-          </select>
+            theme={theme}
+            disabled={loading}
+            onChange={(next) => apply(setBrowseProfile(sessionRef.current, next.id, logDirectory(profileRoots(next))))}
+          />
           <button type="button" onClick={() => { if (up) go(up); }} disabled={!up || loading} className="rounded p-1 disabled:opacity-30" aria-label="上级目录">
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
@@ -318,6 +352,9 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
         )}
 
         <div className={`shrink-0 border-t px-2.5 py-2 ${light ? 'border-slate-200 bg-slate-50' : 'border-slate-800 bg-slate-950'}`}>
+          {output ? (
+            <pre className={`mb-1.5 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-md border px-2 py-1 font-mono text-[10px] leading-relaxed ${light ? 'border-slate-200 bg-white text-slate-700' : 'border-slate-800 bg-slate-900 text-slate-300'}`}>{output}</pre>
+          ) : null}
           <label className="flex items-center gap-2 font-mono text-[11px]">
             <span className="shrink-0 text-indigo-500">$</span>
             <input
@@ -326,12 +363,12 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
               value={command}
               onChange={(event) => { setCommand(event.target.value); setCandidates([]); }}
               onKeyDown={onCommandKey}
-              placeholder="cd 目录 · log · Tab 补全"
+              placeholder="cd / ls / 任意 SSH 命令 · Tab 补全"
               className={`h-8 w-full rounded-md border px-2 outline-none ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-900'}`}
             />
           </label>
           <p className={`mt-1 min-h-4 truncate text-[10px] ${light ? 'text-slate-500' : 'text-slate-400'}`} aria-live="polite">
-            {status || (candidates.length > 1 ? candidates.join('  ') : 'cd /path · cd .. · log 转到日志目录 · Tab 补全当前列表')}
+            {status || (candidates.length > 1 ? candidates.join('  ') : 'cd /path · ls · 远程别名如 log · 任意命令在当前目录执行')}
           </p>
         </div>
       </section>

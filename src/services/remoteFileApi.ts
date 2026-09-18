@@ -1,4 +1,4 @@
-import { DownloadTaskView, ProbeResult, RemoteApiPath, RemoteDirList, RemoteServerDraft, RemoteServerRecord, SftpProfileView } from '../config/fileLoadTypes';
+import { DownloadTaskView, ProbeResult, RemoteApiPath, RemoteDirList, RemoteExecResult, RemoteServerDraft, RemoteServerRecord, SftpProfileView } from '../config/fileLoadTypes';
 
 export class RemoteFileApi {
   static async profiles(): Promise<SftpProfileView[]> {
@@ -48,6 +48,15 @@ export class RemoteFileApi {
 
   static async list(profileId: string, remotePath: string): Promise<RemoteDirList> {
     return this.json<RemoteDirList>(await fetch(RemoteApiPath.list(profileId, remotePath)));
+  }
+
+  static async exec(profileId: string, remotePath: string, command: string): Promise<RemoteExecResult> {
+    const response = await fetch(RemoteApiPath.Exec, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId, path: remotePath, command }),
+    });
+    return this.json<RemoteExecResult>(response);
   }
 
   static async create(profileId: string, remotePath: string): Promise<DownloadTaskView> {

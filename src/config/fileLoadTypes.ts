@@ -116,6 +116,7 @@ export class RemoteApiPath {
   static readonly Servers = '/api/sftp/servers';
   static readonly ServerProbe = '/api/sftp/servers/probe';
   static readonly List = '/api/sftp/list';
+  static readonly Exec = '/api/sftp/exec';
   static readonly Downloads = '/api/sftp/downloads';
 
   static task(id: string): string {
@@ -134,4 +135,11 @@ export class RemoteApiPath {
     const params = new URLSearchParams({ profileId, path: remotePath });
     return `${this.List}?${params.toString()}`;
   }
+}
+
+export interface RemoteExecResult {
+  ok: boolean;
+  code: number | null;
+  text: string;
+  cwd: string | null;
 }

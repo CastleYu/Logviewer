@@ -1,4 +1,4 @@
-import { denyOutsideRoots, joinRemotePath, logDirectory, normalizeRemotePath } from './browsePath';
+import { denyOutsideRoots, joinRemotePath, normalizeRemotePath } from './browsePath';
 
 export interface BrowseEntry {
   name: string;
@@ -12,6 +12,7 @@ export type BrowseAction =
   | { kind: 'open'; path: string }
   | { kind: 'stay'; path: string; message?: string }
   | { kind: 'refresh'; path: string }
+  | { kind: 'exec'; path: string; command: string }
   | { kind: 'reject'; path: string; message: string };
 
 export function listingAction(entry: BrowseEntry): 'enter' | 'open' {
@@ -106,13 +107,6 @@ export function applyBrowseCommand(
   const cmd = parts[0]?.toLowerCase() || '';
   const rest = parts.slice(1).join(' ');
 
-  if (cmd === 'log' && parts.length === 1) {
-    const path = logDirectory(roots);
-    const denied = denyOutsideRoots(path, roots);
-    if (denied) return { kind: 'reject', path: current, message: denied };
-    return { kind: 'enter', path };
-  }
-
   if (cmd === 'cd') {
     const resolved = resolveCd(current, rest, roots);
     if (resolved.ok === false) return { kind: 'reject', path: current, message: resolved.message };
@@ -134,5 +128,5 @@ export function applyBrowseCommand(
     if (entry) return applyListingAction(current, entry);
   }
 
-  return { kind: 'reject', path: current, message: `无法识别命令：${trimmed}` };
+  return { kind: 'exec', path: current, command: trimmed };
 }
