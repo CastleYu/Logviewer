@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useId, useRef, useState } 
 import { createPortal } from 'react-dom';
 import { ExternalLink, FolderSearch, X } from 'lucide-react';
 import { LogFormatConfig } from '../config/logFormatTypes';
-import { SourceColumns, SourceConst, SourceMatch, SourceTarget } from '../config/sourceTypes';
+import { SourceColumns, SourceConst, SourceMatch, SourceOpener, SourceTarget } from '../config/sourceTypes';
 import { SourceApi } from '../services/sourceApi';
 import { shortPaths, sourceColumns, sourceTarget } from '../utils/sourceUtils';
 import { LogEntry } from '../types';
@@ -15,6 +15,9 @@ interface SourceContextValue {
   setColumns: (id: string, columns: SourceColumns) => void;
   choose: (choice: Choice) => void;
   notify: (message: string) => void;
+  openers: SourceOpener[];
+  overrideId: string | null;
+  setOverrideId: (id: string | null) => void;
 }
 const SourceContext = createContext<SourceContextValue>(null!);
 
@@ -31,8 +34,15 @@ export function SourceProvider({ children }: { children: React.ReactNode }) {
   });
   const [choice, setChoice] = useState<Choice | null>(null);
   const [message, setMessage] = useState('');
+  const [openers, setOpeners] = useState<SourceOpener[]>([]);
+  const [overrideId, setOverrideId] = useState<string | null>(null);
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 6000); return () => clearTimeout(timer); }, [message]);
-  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), columns, setColumns: (id, value) => {
+  useEffect(() => {
+    let cancelled = false;
+    SourceApi.state().then((data) => { if (!cancelled) setOpeners(data.openers); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [revision]);
+  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), openers, overrideId, setOverrideId, columns, setColumns: (id, value) => {
     const next = { ...columns, [id]: value };
     setColumns(next);
     try { localStorage.setItem(SourceConst.ColumnsKey, JSON.stringify(next)); } catch { setMessage('列设置仅在本次会话有效：浏览器存储不可用'); }
@@ -59,8 +69,11 @@ export function SourceMenuItem({ log, format, field, light, onClose }: { log: Lo
   }, [active, valid, target.file, source.revision]);
   if (!active) return null;
   const single = matches?.length === 1 ? matches[0] : null;
-  const enabled = valid && !!matches?.length && (matches.length > 1 || single?.ready) && !busy && !error;
-  const tip = !valid ? '缺少文件名或有效源码行号，请检查源码列设置' : error || (matches === null ? '正在查询目录索引…' : matches.length === 0 ? `没有找到 ${target.file} 的索引，请先添加目录或重建索引` : single ? !single.ide ? '该文件类型不支持打开，仅支持 py / java / c / cpp' : !single.ready ? `唯一匹配：${single.path}；请在源码索引中配置 ${SourceConst.Names[single.ide]}` : `唯一匹配：使用 ${SourceConst.Names[single.ide]} 打开 ${single.path}，定位第 ${target.line} 行` : `找到 ${matches.length} 个同名文件，点击后选择绝对路径，定位第 ${target.line} 行`);
+  const override = source.overrideId ? source.openers.find((item) => item.id === source.overrideId) : null;
+  const ready = override ? !!override.exe : !!single?.ready;
+  const openerName = override?.name || single?.openerName;
+  const enabled = valid && !!matches?.length && (matches.length > 1 || ready) && !busy && !error;
+  const tip = !valid ? '缺少文件名或有效源码行号，请检查源码列设置' : error || (matches === null ? '正在查询目录索引…' : matches.length === 0 ? `没有找到 ${target.file} 的索引，请先添加目录或重建索引` : single ? !openerName && !override ? '没有匹配的打开程序，请配置后缀/正则或在顶栏临时指定' : !ready ? `唯一匹配：${single.path}；请配置 ${openerName || '打开程序'} 的启动路径` : `唯一匹配：使用 ${openerName} 打开 ${single.path}，定位第 ${target.line} 行` : `找到 ${matches.length} 个同名文件，点击后选择绝对路径，定位第 ${target.line} 行`);
   const run = async () => {
     if (!enabled || !matches) return;
     if (matches.length > 1) {
@@ -68,7 +81,7 @@ export function SourceMenuItem({ log, format, field, light, onClose }: { log: Lo
       source.choose({ target, matches, x: rect.left, y: rect.top, light }); onClose();
     } else {
       setBusy(true);
-      try { source.notify((await SourceApi.open(target, matches[0].path)).message); onClose(); }
+      try { source.notify((await SourceApi.open(target, matches[0].path, source.overrideId || undefined)).message); onClose(); }
       catch (e) { source.notify((e as Error).message); }
       finally { setBusy(false); }
     }
@@ -89,5 +102,11 @@ export function SourceChoices({ choice, onClose, notify }: { choice: Choice; onC
     document.addEventListener('mousedown', close); document.addEventListener('keydown', key);
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); if (previous?.isConnected) previous.focus(); };
   }, [onClose]);
-  return createPortal(<div ref={ref} tabIndex={-1} role="dialog" aria-label="选择源码文件" style={{ left: Math.max(8, Math.min(choice.x, window.innerWidth - 528)), top: Math.max(8, Math.min(choice.y, window.innerHeight - 340)) }} className={`fixed z-[110] w-[520px] max-w-[calc(100vw-16px)] rounded-xl p-3 shadow-xl focus:outline-none ${choice.light ? 'bg-white text-slate-800' : 'bg-slate-900 text-slate-100'}`}><div className="mb-2 flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><FolderSearch size={16} />选择源码文件 · {choice.matches.length} 个匹配</span><button aria-label="关闭源码选择" onClick={onClose} className="rounded p-1 hover:bg-slate-500/20"><X size={16} /></button></div><p className="mb-2 text-xs">{choice.target.file} · 第 {choice.target.line} 行</p><div className="max-h-60 overflow-auto">{choice.matches.map((item, i) => <button key={item.path} disabled={busy || !item.ready} title={`${item.path}\n${item.ide ? item.ready ? `使用 ${SourceConst.Names[item.ide]} 打开第 ${choice.target.line} 行` : `请先配置 ${SourceConst.Names[item.ide]}` : '不支持的文件类型'}`} onClick={async () => { setBusy(true); try { notify((await SourceApi.open(choice.target, item.path)).message); onClose(); } catch (e) { notify((e as Error).message); } finally { setBusy(false); } }} className="block w-full rounded-md px-2 py-2 text-left hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"><span className="block break-all font-mono text-xs">{labels[i]}</span><span className="text-xs">{item.ide ? SourceConst.Names[item.ide] : '未映射程序'}{!item.ready ? ' · 请先配置程序' : ''}</span></button>)}</div></div>, document.body);
+  const source = useSource();
+  const override = source.overrideId ? source.openers.find((item) => item.id === source.overrideId) : null;
+  return createPortal(<div ref={ref} tabIndex={-1} role="dialog" aria-label="选择源码文件" style={{ left: Math.max(8, Math.min(choice.x, window.innerWidth - 528)), top: Math.max(8, Math.min(choice.y, window.innerHeight - 340)) }} className={`fixed z-[110] w-[520px] max-w-[calc(100vw-16px)] rounded-xl p-3 shadow-xl focus:outline-none ${choice.light ? 'bg-white text-slate-800' : 'bg-slate-900 text-slate-100'}`}><div className="mb-2 flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><FolderSearch size={16} />选择源码文件 · {choice.matches.length} 个匹配</span><button aria-label="关闭源码选择" onClick={onClose} className="rounded p-1 hover:bg-slate-500/20"><X size={16} /></button></div><p className="mb-2 text-xs">{choice.target.file} · 第 {choice.target.line} 行</p><div className="max-h-60 overflow-auto">{choice.matches.map((item, i) => {
+    const ready = override ? !!override.exe : item.ready;
+    const name = override?.name || item.openerName;
+    return <button key={item.path} disabled={busy || !ready} title={`${item.path}\n${name ? ready ? `使用 ${name} 打开第 ${choice.target.line} 行` : `请先配置 ${name}` : '没有匹配的打开程序'}`} onClick={async () => { setBusy(true); try { notify((await SourceApi.open(choice.target, item.path, source.overrideId || undefined)).message); onClose(); } catch (e) { notify((e as Error).message); } finally { setBusy(false); } }} className="block w-full rounded-md px-2 py-2 text-left hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"><span className="block break-all font-mono text-xs">{labels[i]}</span><span className="text-xs">{name || '未映射程序'}{!ready ? ' · 请先配置程序' : ''}</span></button>;
+  })}</div></div>, document.body);
 }

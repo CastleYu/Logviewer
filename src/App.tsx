@@ -23,6 +23,8 @@ import { RemoteFileApi } from './services/remoteFileApi';
 import { Upload } from 'lucide-react';
 import { RecordMode } from './config/stackTypes';
 import { StackDetail } from './components/StackDetail';
+import { useSource } from './components/SourceNavigation';
+import { sourceColumns, sourceTarget } from './utils/sourceUtils';
 import { searchText } from './utils/recordEntries';
 import { csvLogs, jsonLogs } from './utils/logExport';
 
@@ -101,6 +103,7 @@ export default function App() {
   const [sftpProfiles, setSftpProfiles] = useState<SftpProfileView[]>([]);
   const [browseVisible, setBrowseVisible] = useState(false);
   const [browseRequest, setBrowseRequest] = useState<BrowseOpenRequest | null>(null);
+  const sourceNav = useSource();
   const isBusy = LoadState.busy(fileLoad) || isLoading;
 
   const openBrowseWindow = useCallback((profileId?: string, path?: string) => {
@@ -619,6 +622,20 @@ export default function App() {
     });
   }, [logs, filter, selectedFormat]);
 
+  const sourceFiles = useMemo(() => {
+    const cols = sourceColumns(selectedFormat, sourceNav.columns);
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const log of filteredLogs) {
+      const file = sourceTarget(log, cols).file;
+      if (!file || file === '-' || seen.has(file)) continue;
+      seen.add(file);
+      names.push(file);
+      if (names.length >= 80) break;
+    }
+    return names;
+  }, [filteredLogs, selectedFormat, sourceNav.columns]);
+
   // 计算全文搜索匹配的日志 ID 列表 (支持指定单列/多列与全文搜索，用于定位导航与条数统计)
   const searchMatchLogIds = useMemo(() => {
     if (!filter.searchKeyword || !filter.searchKeyword.trim()) return [];
@@ -848,6 +865,7 @@ export default function App() {
         onFormatChange={handleFormatChange}
         stackEnabled={stackMode ?? selectedFormat.record.mode === RecordMode.Stack}
         onStackChange={handleStackMode}
+        sourceFiles={sourceFiles}
       />
 
       <FileLoadBar

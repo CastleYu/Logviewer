@@ -1,5 +1,6 @@
 import React from 'react';
 import { SourceSettings } from './SourceSettings';
+import { SourceOpenerSwitch } from './SourceOpenerSwitch';
 import { LogStats, ThemeMode } from '../types';
 import { ConfigError, LogFormatConfig } from '../config/logFormatTypes';
 import { formatFileSize } from '../utils/logParser';
@@ -36,6 +37,7 @@ interface HeaderDashboardProps {
   onFormatChange: (formatId: string) => void;
   stackEnabled: boolean;
   onStackChange: (enabled: boolean) => void;
+  sourceFiles?: string[];
 }
 
 export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
@@ -54,6 +56,7 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
   onFormatChange,
   stackEnabled,
   onStackChange,
+  sourceFiles = [],
 }) => {
   const isLight = theme === 'light';
 
@@ -62,6 +65,7 @@ export const HeaderDashboard: React.FC<HeaderDashboardProps> = ({
       {/* 紧凑版顶栏：整合 Logo、文件按钮与核心统计指标为单行/极窄结构 */}
       <div className="flex flex-wrap items-center justify-between px-3 py-1.5 gap-2">
         <SourceSettings format={formats.find((item) => item.id === selectedFormatId) || formats[0]} light={isLight} />
+        <SourceOpenerSwitch files={sourceFiles} light={isLight} />
         {/* 左侧：Logo & 文件简讯 */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2 shrink-0">
