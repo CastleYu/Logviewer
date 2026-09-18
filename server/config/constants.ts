@@ -39,6 +39,7 @@ export class EnvKey {
   static readonly Fingerprint = 'LOGVIEWER_SFTP_HOST_FINGERPRINT';
   static readonly MaxBytes = 'LOGVIEWER_SFTP_MAX_BYTES';
   static readonly ListenPort = 'LOGVIEWER_PORT';
+  static readonly HmrPort = 'LOGVIEWER_HMR_PORT';
   static readonly FallbackHost = 'ABYSS_SERVER_HOST';
   static readonly FallbackPort = 'ABYSS_SERVER_PORT';
   static readonly FallbackUser = 'ABYSS_SERVER_USER';
@@ -51,6 +52,8 @@ export class ServerValue {
   static readonly DefaultPort = 22;
   static readonly DefaultSmbPort = 445;
   static readonly DefaultListenPort = 3000;
+  static readonly DefaultHmrPort = 24678;
+  static readonly PortBackoffTries = 20;
   static readonly DefaultRoot = '/';
   static readonly DefaultMaxBytes = 512 * 1024 * 1024;
   static readonly ConnectTimeoutMs = 15_000;

@@ -9,6 +9,7 @@
     "verify:config": "tsx scripts/verify-log-contract.ts",
     "verify:stack": "tsx scripts/verify-stack.ts",
     "verify:sftp-browse": "tsx scripts/verify-sftp-browse.ts",
+    "verify:listen": "tsx scripts/verify-listen-backoff.ts",
     "preview": "tsx server/main.ts --production",
     "start": "tsx server/main.ts --production",
     "clean": "rm -rf dist server.js",

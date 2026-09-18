@@ -1,3 +1,4 @@
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -13,13 +14,15 @@ import { RemoteRegistry } from './config/remoteRegistry';
 import { SftpConfig } from './config/sftpConfig';
 import { registerErrorRoute, registerSftpRoutes } from './routes/sftpRoutes';
 import { DownloadService } from './services/downloadService';
+import { ListenBackoff } from './services/listenBackoff';
 
 dotenv.config();
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
-const port = Number(process.env[EnvKey.ListenPort]) || ServerValue.DefaultListenPort;
+const preferredPort = Number(process.env[EnvKey.ListenPort]) || ServerValue.DefaultListenPort;
 const production = process.argv.includes('--production');
+const host = '127.0.0.1';
 
 app.use(HttpConst.Api, localAccess);
 app.use(express.json({ limit: '32kb' }));
@@ -34,11 +37,27 @@ if (production) {
   app.use(express.static(path.join(rootDir, 'dist')));
   app.get('*', (_request, response) => response.sendFile(path.join(rootDir, 'dist', 'index.html')));
 } else {
-  const vite = await createViteServer({ root: rootDir, server: { middlewareMode: true }, appType: 'spa' });
+  const preferredHmr = Number(process.env[EnvKey.HmrPort]) || ServerValue.DefaultHmrPort;
+  const hmrPort = await ListenBackoff.pick(host, preferredHmr, ServerValue.PortBackoffTries);
+  process.env[EnvKey.HmrPort] = String(hmrPort);
+  if (hmrPort !== preferredHmr) {
+    process.stdout.write(`Vite HMR 端口 ${preferredHmr} 占用中，改用 ${hmrPort}\n`);
+  }
+  const vite = await createViteServer({
+    root: rootDir,
+    server: {
+      middlewareMode: true,
+      hmr: process.env.DISABLE_HMR === 'true' ? false : { host, port: hmrPort },
+    },
+    appType: 'spa',
+  });
   app.use(vite.middlewares);
 }
 
 registerErrorRoute(app);
-app.listen(port, '127.0.0.1', () => {
-  process.stdout.write(`LogViewer running at http://127.0.0.1:${port}\n`);
-});
+const server = http.createServer(app);
+const port = await ListenBackoff.listen(server, host, preferredPort, ServerValue.PortBackoffTries);
+if (port !== preferredPort) {
+  process.stdout.write(`HTTP 端口 ${preferredPort} 占用中，改用 ${port}\n`);
+}
+process.stdout.write(`LogViewer running at http://${host}:${port}\n`);
