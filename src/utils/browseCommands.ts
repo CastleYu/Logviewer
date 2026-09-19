@@ -2,7 +2,7 @@ import { denyOutsideRoots, joinRemotePath, normalizeRemotePath } from './browseP
 
 export interface BrowseEntry {
   name: string;
-  type: 'file' | 'dir';
+  type: 'file' | 'dir' | 'link';
   size?: number;
   modifyTime?: number;
 }
@@ -63,8 +63,6 @@ export function resolveCd(current: string, target: string, roots: string[]): { o
   } else {
     next = joinRemotePath(current, trimmed);
   }
-  const denied = denyOutsideRoots(next, roots);
-  if (denied) return { ok: false, path: current, message: denied };
   return { ok: true, path: next };
 }
 

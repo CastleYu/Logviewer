@@ -32,24 +32,23 @@ export function allowedRoots(roots?: string[], fallback?: string): string[] {
 }
 
 export function isAllowedPath(pathValue: string, roots: string[]): boolean {
-  const list = roots.length > 0 ? roots : ['/'];
-  return list.some((root) => underAllowedRoot(pathValue, root));
+  // Registered paths are starting points/favorites only; browsing is unrestricted.
+  return Boolean(normalizeRemotePath(pathValue));
 }
 
 export function parentRemotePath(current: string, roots: string[]): string | null {
   const normalized = normalizeRemotePath(current);
-  if (roots.some((root) => normalizeRemotePath(root) === normalized)) return null;
+  if (normalized === '/') return null;
   const idx = normalized.lastIndexOf('/');
   const parent = idx <= 0 ? '/' : normalized.slice(0, idx);
-  return isAllowedPath(parent, roots) ? parent : null;
+  return parent;
 }
 
 export function pathCrumbs(current: string, roots: string[]): string[] {
   const normalized = normalizeRemotePath(current);
-  const root = roots.find((item) => underAllowedRoot(normalized, item)) || roots[0] || '/';
-  const base = normalizeRemotePath(root);
+  const base = '/';
   if (normalized === base) return [base];
-  const parts = normalized.slice(base === '/' ? 1 : base.length + 1).split('/').filter(Boolean);
+  const parts = normalized.slice(1).split('/').filter(Boolean);
   const items = [base];
   let cursor = base;
   for (const part of parts) {
@@ -66,8 +65,5 @@ export function logDirectory(roots: string[]): string {
 }
 
 export function denyOutsideRoots(pathValue: string, roots: string[]): string | null {
-  const normalized = normalizeRemotePath(pathValue);
-  if (isAllowedPath(normalized, roots)) return null;
-  if (roots.length === 1) return `远程路径必须位于 ${normalizeRemotePath(roots[0])} 下`;
-  return '远程路径必须位于已注册的日志路径下';
+  return null;
 }

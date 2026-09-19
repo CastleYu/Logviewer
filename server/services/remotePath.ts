@@ -21,14 +21,9 @@ export class RemotePath {
   }
 
   static assertAllowed(value: string, roots: string[]): string {
-    const normalized = this.parse(value);
-    const list = roots.length > 0 ? roots : ['/'];
-    if (list.some((root) => this.underRoot(normalized, root))) return normalized;
-    const safeRoot = path.posix.normalize(list[0]);
-    const message = list.length === 1
-      ? `远程路径必须位于 ${safeRoot} 下`
-      : '远程路径必须位于已注册的日志路径下';
-    throw new ServiceError(ApiErrorCode.PathDenied, message, 403);
+    // The server account and SSH/SFTP permissions are the authority for remote paths.
+    // Registered roots remain useful as browse defaults, but are not an artificial jail.
+    return this.parse(value);
   }
 
   static rootsOf(root: string, roots?: string[]): string[] {

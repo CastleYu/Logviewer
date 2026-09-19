@@ -9,6 +9,7 @@ interface RemoteServerEditorProps {
   disabled?: boolean;
   onBack: () => void;
   onChanged: () => void;
+  onBrowse?: (server: RemoteServerRecord) => void;
 }
 
 function emptyDraft(): RemoteServerDraft {
@@ -19,7 +20,7 @@ function emptyDraft(): RemoteServerDraft {
     port: 22,
     user: '',
     password: '',
-    paths: ['', ''],
+    paths: [''],
   };
 }
 
@@ -37,7 +38,7 @@ function fromRecord(record: RemoteServerRecord): RemoteServerDraft {
   };
 }
 
-export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, disabled, onBack, onChanged }) => {
+export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, disabled, onBack, onChanged, onBrowse }) => {
   const light = theme === 'light';
   const [servers, setServers] = useState<RemoteServerRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -121,18 +122,20 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
     setShowPassword(false);
   };
 
-  const save = async () => {
+  const save = async (browse = false) => {
     if (busy) return;
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
+      const payload = { ...draft, paths: draft.paths.map((item) => item.trim()).filter(Boolean) };
       const saved = selectedId
-        ? await RemoteFileApi.updateServer(selectedId, draft)
-        : await RemoteFileApi.createServer(draft);
+        ? await RemoteFileApi.updateServer(selectedId, payload)
+        : await RemoteFileApi.createServer(payload);
       await refresh(saved.id);
       setMessage(selectedId ? '已更新并明文写入本机注册文件' : '已注册并明文保存密码');
       onChanged();
+      if (browse) onBrowse?.(saved);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存失败');
     } finally {
@@ -228,8 +231,8 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block sm:col-span-2">
-            <span className="mb-1.5 block text-xs font-semibold">显示名称</span>
-            <input value={draft.name} onChange={(event) => patch({ name: event.target.value })} disabled={busy} placeholder="生产机 / 测试机" className={field} />
+             <span className="mb-1.5 block text-xs font-semibold">显示名称（可选）</span>
+             <input value={draft.name} onChange={(event) => patch({ name: event.target.value })} disabled={busy} placeholder="默认使用主机地址" className={field} />
           </label>
           <div className="sm:col-span-2">
             <span className="mb-1.5 block text-xs font-semibold">协议</span>
@@ -300,7 +303,7 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
           </label>
           <div className="sm:col-span-2">
             <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-xs font-semibold">日志路径（可多个）</span>
+               <span className="text-xs font-semibold">收藏路径（可选）</span>
               <button type="button" onClick={addPath} disabled={busy} className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:underline">
                 <FolderPlus className="h-3.5 w-3.5" />
                 添加路径
@@ -313,14 +316,14 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
                     value={item}
                     onChange={(event) => setPath(index, event.target.value)}
                     disabled={busy}
-                    placeholder="/var/log/application"
+                     placeholder="/var/log（仅作为起始快捷方式）"
                     className={`${field} font-mono`}
                   />
                   <button
                     type="button"
                     onClick={() => removePath(index)}
                     disabled={busy || draft.paths.length <= 1}
-                    className={`shrink-0 rounded-md p-2 disabled:opacity-30 ${light ? 'hover:bg-rose-50 text-slate-500 hover:text-rose-600' : 'hover:bg-rose-950/40 text-slate-400 hover:text-rose-300'}`}
+                    className={`shrink-0 rounded-md p-2 disabled:opacity-30 ${light ? 'hover:bg-rose-50 text-rose-700 hover:text-rose-600' : 'hover:bg-rose-950/40 text-rose-300 hover:text-rose-200'}`}
                     aria-label="删除该路径"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -328,7 +331,7 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
                 </div>
               ))}
             </div>
-            <p className={`mt-1.5 text-[11px] ${light ? 'text-slate-500' : 'text-slate-400'}`}>下载只允许打开这些绝对路径下的文件。一项注册对应一台 {draft.protocol === 'smb' ? 'SMB' : 'SFTP'} 服务器和一组日志目录{draft.protocol === 'smb' ? '（路径相对于共享）' : ''}。</p>
+            <p className={`mt-1.5 text-[11px] ${light ? 'text-slate-500' : 'text-slate-400'}`}>收藏路径只用于快速进入起始目录；SFTP 浏览和命令可以访问服务器上的任意路径。SMB 路径相对于共享。</p>
           </div>
         </div>
       )}
@@ -359,6 +362,7 @@ export const RemoteServerEditor: React.FC<RemoteServerEditorProps> = ({ theme, d
           {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : selectedId ? <Server className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
           {selectedId ? '保存修改' : '注册服务器'}
         </button>
+        {onBrowse ? <button type="button" onClick={() => void save(true)} disabled={busy} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40">保存并浏览</button> : null}
       </div>
     </form>
   );

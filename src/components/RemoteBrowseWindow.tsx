@@ -3,8 +3,8 @@ import { ArrowUp, ChevronRight, FolderOpen, GripHorizontal, Minus, RefreshCw, Se
 import { RemoteDirEntry, SftpProfileView } from '../config/fileLoadTypes';
 import { ThemeMode } from '../types';
 import { RemoteFileApi } from '../services/remoteFileApi';
-import { applyBrowseCommand, completeBrowseInput } from '../utils/browseCommands';
-import { allowedRoots, isAllowedPath, logDirectory, parentRemotePath, pathCrumbs } from '../utils/browsePath';
+import { completeBrowseInput } from '../utils/browseCommands';
+import { allowedRoots, logDirectory, normalizeRemotePath, parentRemotePath, pathCrumbs } from '../utils/browsePath';
 import { RemoteFileExplorer } from './RemoteFileExplorer';
 import { ServerPicker } from './ServerPicker';
 import {
@@ -56,6 +56,9 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   const sessionRef = useRef(session);
   const [everOpened, setEverOpened] = useState(false);
   const [command, setCommand] = useState('');
+  const [pathInput, setPathInput] = useState('/');
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const [status, setStatus] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -63,9 +66,14 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [executing, setExecuting] = useState(false);
+  const [size, setSize] = useState({ width: 560, height: 460 });
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const resizeRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const appliedNonce = useRef(0);
+  const commandAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => commandAbort.current?.abort(), []);
 
   const apply = (next: BrowseSession) => {
     sessionRef.current = next;
@@ -73,6 +81,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   };
 
   useEffect(() => { sessionRef.current = session; }, [session]);
+  useEffect(() => { setPathInput(session.path); }, [session.path]);
 
   useEffect(() => {
     if (!visible) return;
@@ -87,6 +96,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
       return;
     }
     if (!request) return;
+    if (request.profileId && !profiles.some((item) => item.id === request.profileId)) return;
     const nextProfile = (request.profileId && profiles.find((item) => item.id === request.profileId && item.ready))
       || ready[0]
       || profiles[0];
@@ -100,6 +110,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
     setStatus(null);
     setCandidates([]);
     setCommand('');
+    setPathInput(nextPath);
   }, [profiles, request, visible]);
 
   const profile = profiles.find((item) => item.id === session.profileId) || ready[0] || profiles[0];
@@ -133,9 +144,11 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   }, [currentPath, profiles, refreshKey, session.profileId]);
 
   const go = (pathValue: string) => {
+    const normalized = normalizeRemotePath(pathValue);
+    setPathInput(normalized);
     setSelected(null);
     setCandidates([]);
-    apply(setBrowsePath(sessionRef.current, pathValue));
+    apply(setBrowsePath(sessionRef.current, normalized));
   };
 
   const refresh = () => {
@@ -145,73 +158,45 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   };
 
   const runRemote = async (commandText: string) => {
+    if (executing || !commandText.trim()) return;
     if (!profile?.ready) {
       setStatus('请先选择已配置的服务器');
       return;
     }
     if (profile.protocol === 'smb') {
-      if (commandText.trim() === 'log') {
-        go(logDirectory(roots));
-        setStatus(null);
-        return;
-      }
-      setStatus('SMB 不支持远程命令，请使用 cd / ls / open');
+      setStatus('SMB 不支持 SSH 命令，请使用上方路径输入框和目录列表。');
       return;
     }
+    setHistory((items) => [...items.filter((item) => item !== commandText), commandText].slice(-30));
+    setHistoryIndex(-1);
+    setExecuting(true);
     setStatus('正在执行…');
     try {
-      const result = await RemoteFileApi.exec(profile.id, currentPath, commandText);
-      setOutput(result.text || (result.ok ? '' : `退出码 ${result.code ?? '?'}`));
-      setStatus(result.ok ? null : `退出码 ${result.code ?? '失败'}`);
+      const controller = new AbortController();
+      commandAbort.current = controller;
+      const result = await RemoteFileApi.exec(profile.id, currentPath, commandText, controller.signal);
+      if (sessionRef.current.profileId !== profile.id || sessionRef.current.path !== currentPath) return;
+      setOutput(`${result.text || (result.ok ? '' : `退出码 ${result.code ?? '?'}`)}${result.cwd ? `${result.text ? '\n' : ''}工作目录：${result.cwd}` : ''}`);
+      setStatus(result.ok ? (result.cwd ? `工作目录：${result.cwd}` : null) : `退出码 ${result.code ?? '失败'}${result.cwd ? ` · 工作目录：${result.cwd}` : ''}`);
       if (result.cwd && result.cwd !== currentPath) {
-        if (isAllowedPath(result.cwd, roots)) go(result.cwd);
-        else setStatus(`工作目录已变为 ${result.cwd}（超出允许的浏览范围，列表未切换）`);
+        go(result.cwd);
       } else if (result.ok) {
         refresh();
       }
     } catch (cause) {
       setOutput('');
       setStatus(cause instanceof Error ? cause.message : '远程命令执行失败');
+    } finally {
+      commandAbort.current = null;
+      setExecuting(false);
     }
   };
 
-  const runCommand = (value: string) => {
-    const action = applyBrowseCommand(value, currentPath, roots, entries);
-    setCandidates([]);
-    if (action.kind === 'reject') {
-      setStatus(action.message);
-      return;
+  const onPathKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      go(pathInput);
     }
-    if (action.kind === 'stay') {
-      setStatus(action.message || null);
-      return;
-    }
-    if (action.kind === 'refresh') {
-      setCommand('');
-      setOutput('');
-      refresh();
-      return;
-    }
-    if (action.kind === 'enter') {
-      setCommand('');
-      setOutput('');
-      setStatus(null);
-      go(action.path);
-      return;
-    }
-    if (action.kind === 'exec') {
-      setCommand('');
-      void runRemote(action.command);
-      return;
-    }
-    if (!profile?.ready) {
-      setStatus('请先选择已配置的服务器');
-      return;
-    }
-    setCommand('');
-    setOutput('');
-    setStatus(null);
-    onOpenFile(profile.id, action.path);
   };
 
   const onCommandKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -227,7 +212,20 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      runCommand(command);
+      void runRemote(command);
+      setCommand('');
+    }
+    if (event.key === 'ArrowUp' && history.length) {
+      event.preventDefault();
+      const next = Math.min(historyIndex + 1, history.length - 1);
+      setHistoryIndex(next);
+      setCommand(history[history.length - 1 - next]);
+    }
+    if (event.key === 'ArrowDown' && historyIndex >= 0) {
+      event.preventDefault();
+      const next = historyIndex - 1;
+      setHistoryIndex(next);
+      setCommand(next < 0 ? '' : history[history.length - 1 - next]);
     }
   };
 
@@ -246,6 +244,18 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
   };
 
   const endDrag = () => { dragRef.current = null; };
+
+  const startResize = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    resizeRef.current = { x: event.clientX, y: event.clientY, width: size.width, height: size.height };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  };
+  const resize = (event: React.PointerEvent<HTMLElement>) => {
+    const start = resizeRef.current;
+    if (!start) return;
+    setSize({ width: Math.max(360, Math.min(window.innerWidth - session.x - 8, start.width + event.clientX - start.x)), height: Math.max(300, Math.min(window.innerHeight - session.y - 8, start.height + event.clientY - start.y)) });
+  };
+  const endResize = () => { resizeRef.current = null; };
 
   const hide = () => {
     apply(hideBrowseWindow(sessionRef.current));
@@ -279,8 +289,8 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
         role="dialog"
         aria-label="远程目录"
         aria-hidden={panelHidden}
-        style={{ left: session.x, top: session.y }}
-        className={`fixed z-[70] h-[min(460px,calc(100vh-32px))] w-[min(560px,calc(100vw-16px))] overflow-hidden rounded-xl border shadow-2xl ${
+        style={{ left: `min(${session.x}px, max(8px, calc(100vw - ${size.width + 8}px)))`, top: `min(${session.y}px, max(8px, calc(100vh - ${size.height + 8}px)))`, width: `min(${size.width}px, calc(100vw - 16px))`, height: `min(${size.height}px, calc(100vh - 16px))` }}
+        className={`fixed z-[70] overflow-hidden rounded-xl border shadow-2xl ${
           panelHidden ? 'hidden' : 'flex flex-col'
         } ${light ? 'border-slate-200 bg-white text-slate-900' : 'border-slate-700 bg-slate-900 text-slate-100'}`}
       >
@@ -303,7 +313,7 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
           </button>
         </header>
 
-        <div className={`flex shrink-0 items-center gap-1.5 border-b px-2.5 py-1.5 ${light ? 'border-slate-200' : 'border-slate-800'}`}>
+        <div className={`flex shrink-0 flex-wrap items-center gap-1.5 border-b px-2.5 py-1.5 ${light ? 'border-slate-200' : 'border-slate-800'}`}>
           <ServerPicker
             profiles={profiles}
             value={profile?.id || ''}
@@ -348,6 +358,13 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
             onEnter={go}
             onOpen={(pathValue) => { if (profile?.ready) onOpenFile(profile.id, pathValue); }}
             onRefresh={refresh}
+            onLink={(pathValue) => {
+              const id = profile.id;
+              RemoteFileApi.stat(id, pathValue).then((item) => {
+                if (sessionRef.current.profileId !== id) return;
+                if (item.type === 'dir') go(pathValue); else onOpenFile(id, pathValue);
+              }).catch((cause) => setError(cause.message));
+            }}
           />
         )}
 
@@ -355,6 +372,11 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
           {output ? (
             <pre className={`mb-1.5 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-md border px-2 py-1 font-mono text-[10px] leading-relaxed ${light ? 'border-slate-200 bg-white text-slate-700' : 'border-slate-800 bg-slate-900 text-slate-300'}`}>{output}</pre>
           ) : null}
+          <label className="mb-1 flex items-center gap-2 font-mono text-[11px]">
+            <span className="shrink-0 text-slate-500">路径</span>
+            <input aria-label="远程路径" value={pathInput} onChange={(event) => setPathInput(event.target.value)} onKeyDown={onPathKey} placeholder="/" className={`h-8 min-w-0 flex-1 rounded-md border px-2 outline-none ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-900'}`} />
+            <button type="button" onClick={() => go(pathInput)} disabled={loading || executing} className="rounded bg-indigo-600 px-2 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40">进入</button>
+          </label>
           <label className="flex items-center gap-2 font-mono text-[11px]">
             <span className="shrink-0 text-indigo-500">$</span>
             <input
@@ -363,14 +385,17 @@ export const RemoteBrowseWindow: React.FC<RemoteBrowseWindowProps> = ({
               value={command}
               onChange={(event) => { setCommand(event.target.value); setCandidates([]); }}
               onKeyDown={onCommandKey}
-              placeholder="cd / ls / 任意 SSH 命令 · Tab 补全"
-              className={`h-8 w-full rounded-md border px-2 outline-none ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-900'}`}
+              placeholder={profile?.protocol === 'smb' ? 'SMB 不支持 SSH 命令' : '任意 SSH 命令：cd、ls -la、管道…'}
+              disabled={executing || profile?.protocol === 'smb'}
+              className={`h-8 w-full rounded-md border px-2 outline-none disabled:cursor-not-allowed disabled:opacity-50 ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-900'}`}
             />
           </label>
+          {executing ? <button type="button" onClick={() => commandAbort.current?.abort()} className="mt-1 rounded border px-2 py-1 text-xs">停止命令</button> : null}
           <p className={`mt-1 min-h-4 truncate text-[10px] ${light ? 'text-slate-500' : 'text-slate-400'}`} aria-live="polite">
-            {status || (candidates.length > 1 ? candidates.join('  ') : 'cd /path · ls · 远程别名如 log · 任意命令在当前目录执行')}
+            {status || (candidates.length > 1 ? candidates.join('  ') : '路径输入负责导航；命令输入原样交给远程 POSIX shell')}
           </p>
         </div>
+        <span aria-hidden="true" onPointerDown={startResize} onPointerMove={resize} onPointerUp={endResize} onPointerCancel={endResize} className="absolute bottom-0 right-0 h-4 w-4 cursor-se-resize" />
       </section>
     </>
   );

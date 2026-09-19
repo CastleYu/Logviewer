@@ -5,8 +5,8 @@ export function shQuote(value: string): string {
 }
 
 export function wrapRemoteCommand(cwd: string, command: string): string {
-  const inner = `cd ${shQuote(cwd)} || exit 1\n${command}\nprintf '\\n${ExecCwdMarker}%s\\n' "$PWD"`;
-  return `bash --login -c ${shQuote(inner)}`;
+  const inner = `cd ${shQuote(cwd)} || exit 1\n${command}\nstatus=$?\nprintf '\\n${ExecCwdMarker}%s\\n' "$PWD"\nexit "$status"`;
+  return `sh -c ${shQuote(inner)}`;
 }
 
 export function parseExecOutput(stdout: string): { text: string; cwd: string | null } {

@@ -18,6 +18,7 @@ interface RemoteFileExplorerProps {
   onEnter: (path: string) => void;
   onOpen: (path: string) => void;
   onRefresh: () => void;
+  onLink?: (path: string) => void;
 }
 
 interface MenuState {
@@ -46,6 +47,7 @@ export const RemoteFileExplorer: React.FC<RemoteFileExplorerProps> = ({
   onEnter,
   onOpen,
   onRefresh,
+  onLink,
 }) => {
   const light = theme === 'light';
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -67,6 +69,8 @@ export const RemoteFileExplorer: React.FC<RemoteFileExplorerProps> = ({
   })), [entries, listedPath]);
 
   const activate = (entry: RemoteDirEntry) => {
+    if (busy) return;
+    if (entry.type === 'link' && onLink) { onLink(joinRemotePath(listedPath || '/', entry.name)); return; }
     const action = applyListingAction(listedPath || '/', entry);
     if (action.kind === 'enter') onEnter(action.path);
     else onOpen(action.path);
@@ -115,7 +119,7 @@ export const RemoteFileExplorer: React.FC<RemoteFileExplorerProps> = ({
                       : <FileText className="h-3.5 w-3.5 shrink-0 text-indigo-500" />}
                     <span className="truncate">{entry.name}</span>
                   </td>
-                  <td className={`px-2 py-1.5 ${active ? 'text-indigo-100' : 'text-slate-400'}`}>{entry.type === 'dir' ? '目录' : '文件'}</td>
+                  <td className={`px-2 py-1.5 ${active ? 'text-indigo-100' : 'text-slate-500'}`}>{entry.type === 'dir' ? '目录' : entry.type === 'link' ? '链接' : '文件'}</td>
                   <td className={`px-2 py-1.5 font-mono ${active ? 'text-indigo-100' : 'text-slate-400'}`}>{entry.type === 'dir' ? '' : formatFileSize(entry.size)}</td>
                   <td className={`px-2 py-1.5 font-mono ${active ? 'text-indigo-100' : 'text-slate-400'}`}>{formatTime(entry.modifyTime)}</td>
                 </tr>

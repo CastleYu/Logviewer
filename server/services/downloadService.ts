@@ -65,6 +65,7 @@ export class DownloadService {
     }
     task.cancelled = true;
     task.status = DownloadStatus.Cancelled;
+    task.abort?.();
     await task.client?.end().catch(() => false);
     this.remove(task.partPath);
     return this.view(task);
@@ -78,17 +79,13 @@ export class DownloadService {
   }
 
   private async run(task: DownloadTask, profile: SftpProfile): Promise<void> {
-    const client = new SftpClient(`logviewer-${task.id}`);
+    const client = new SftpClient(`logviewer-download-${task.id}`);
     task.client = client;
     try {
       await client.connect({
-        host: profile.host,
-        port: profile.port,
-        username: profile.user,
-        password: profile.password,
-        privateKey: profile.privateKey,
-        readyTimeout: ServerValue.ReadyTimeoutMs,
-        keepaliveInterval: ServerValue.KeepaliveMs,
+        host: profile.host, port: profile.port, username: profile.user,
+        password: profile.password, privateKey: profile.privateKey,
+        readyTimeout: ServerValue.ReadyTimeoutMs, keepaliveInterval: ServerValue.KeepaliveMs,
         hostHash: profile.fingerprint ? 'sha256' : undefined,
         hostVerifier: profile.fingerprint ? (value) => value === profile.fingerprint : undefined,
       });
@@ -100,12 +97,10 @@ export class DownloadService {
       this.remotePath(resolvedPath, RemotePath.rootsOf(profile.root, profile.roots));
       const stat = await client.stat(task.remotePath);
       task.totalBytes = stat.size;
-      if (stat.size > profile.maxBytes) {
-        throw new ServiceError(ApiErrorCode.FileTooLarge, `文件超过允许的 ${profile.maxBytes} 字节`, 413);
-      }
       task.status = DownloadStatus.Downloading;
       await client.fastGet(task.remotePath, task.partPath, {
         step: (transferred, _chunk, total) => {
+          if (task.cancelled) return;
           task.downloadedBytes = transferred;
           task.totalBytes = total;
         },

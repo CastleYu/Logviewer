@@ -17,8 +17,8 @@ interface RemoteFileDialogProps {
 
 function allowedPaths(profile?: SftpProfileView): string[] {
   if (!profile) return ['/'];
-  if (profile.roots && profile.roots.length > 0) return profile.roots;
-  return [profile.root || '/'];
+  const paths = (profile.roots && profile.roots.length > 0 ? profile.roots : [profile.root || '/']).filter(Boolean);
+  return paths.length > 0 ? paths : ['/'];
 }
 
 export const RemoteFileDialog: React.FC<RemoteFileDialogProps> = ({ open, profiles, busy, theme, onClose, onSubmit, onServersChanged, onBrowseWindow }) => {
@@ -85,6 +85,11 @@ export const RemoteFileDialog: React.FC<RemoteFileDialogProps> = ({ open, profil
             disabled={busy}
             onBack={() => setMode('open')}
             onChanged={() => onServersChanged?.()}
+            onBrowse={(server) => {
+              setProfileId(server.id);
+              onBrowseWindow?.(server.id, server.paths[0] || '/');
+              onClose();
+            }}
           />
         ) : (
         <form onSubmit={submit} className="space-y-4 p-5">
@@ -105,7 +110,7 @@ export const RemoteFileDialog: React.FC<RemoteFileDialogProps> = ({ open, profil
             <input ref={inputRef} value={remotePath} onChange={(event) => setRemotePath(event.target.value)} disabled={busy} placeholder={`${profile?.root || '/'}application.log`} className={`h-10 w-full rounded-lg border px-3 font-mono text-sm outline-none placeholder:text-slate-500 focus:border-indigo-500 ${light ? 'bg-white border-slate-300' : 'bg-slate-950 border-slate-700'}`} />
             {paths.length <= 1 ? (
               <span className={`mt-1.5 flex items-center justify-between gap-2 text-[11px] ${light ? 'text-slate-500' : 'text-slate-400'}`}>
-                <span>允许目录：<code className="font-mono">{paths[0] || '/'}</code></span>
+                <span>起始路径：<code className="font-mono">{paths[0] || '/'}</code></span>
                 <button type="button" onClick={() => openBrowse(paths[0] || '/')} disabled={busy || !profile?.ready || !onBrowseWindow} className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:underline disabled:opacity-40">
                   <FolderOpen className="h-3.5 w-3.5" />
                   浏览目录
@@ -124,7 +129,7 @@ export const RemoteFileDialog: React.FC<RemoteFileDialogProps> = ({ open, profil
                     }}
                     disabled={busy}
                     className={`rounded-md border px-1.5 py-0.5 font-mono ${
-                      light ? 'border-slate-300 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 text-slate-700' : 'border-slate-700 bg-slate-950 hover:bg-indigo-950/50 hover:border-indigo-700 text-slate-300'
+                      light ? 'border-slate-300 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 text-indigo-900' : 'border-slate-700 bg-slate-950 hover:bg-indigo-950/50 hover:border-indigo-700 text-indigo-100'
                     }`}
                   >
                     {item}

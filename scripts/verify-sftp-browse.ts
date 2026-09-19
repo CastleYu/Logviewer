@@ -46,12 +46,12 @@ function verifyCommands(): void {
   assert.equal(cdAbs.kind, 'enter');
   assert.equal(cdAbs.path, '/opt/app/log');
 
-  const cdDenied = applyBrowseCommand('cd /etc', '/var/log', roots, listing);
-  assert.equal(cdDenied.kind, 'reject');
-  assert.equal(cdDenied.path, '/var/log');
+  const cdAnywhere = applyBrowseCommand('cd /etc', '/var/log', roots, listing);
+  assert.equal(cdAnywhere.kind, 'enter');
+  assert.equal(cdAnywhere.path, '/etc');
 
   const resolved = resolveCd('/var/log', '/etc/passwd', roots);
-  assert.equal(resolved.ok, false);
+  assert.equal(resolved.ok, true);
 
   const logJump = applyBrowseCommand('log', '/opt/app/log', roots, listing);
   assert.equal(logJump.kind, 'exec');
@@ -60,9 +60,11 @@ function verifyCommands(): void {
   assert.equal(pwd.kind, 'exec');
   if (pwd.kind === 'exec') assert.equal(pwd.command, 'pwd');
   const wrapped = wrapRemoteCommand('/var/log', 'echo hi');
-  assert.match(wrapped, /bash --login -c/);
+  assert.match(wrapped, /sh -c/);
   assert.match(wrapped, /\/var\/log/);
   assert.match(wrapped, /echo hi/);
+  assert.match(wrapped, /status=\$\?/);
+  assert.match(wrapped, /exit "\$status"/);
   assert.equal(shQuote("a'b"), `'a'\\''b'`);
   const parsed = parseExecOutput("hello\n__LV_CWD__/tmp/log\n");
   assert.equal(parsed.text, 'hello');

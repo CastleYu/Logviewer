@@ -1,6 +1,7 @@
-import SftpClient from 'ssh2-sftp-client';
-import { ServerValue } from '../config/constants';
 import type { RemoteServerRecord } from '../models/remoteModels';
+import { ServerValue } from '../config/constants';
+import type { SftpProfile } from '../models/sftpModels';
+import { withSftpSession } from './remoteSession';
 
 export interface ProbePathResult {
   path: string;
@@ -15,18 +16,9 @@ export interface ProbeResult {
 }
 
 export async function probeSftp(record: RemoteServerRecord): Promise<ProbeResult> {
-  const client = new SftpClient('logviewer-probe');
   try {
-    await client.connect({
-      host: record.host,
-      port: record.port,
-      username: record.user,
-      password: record.password,
-      readyTimeout: ServerValue.ReadyTimeoutMs,
-      keepaliveInterval: ServerValue.KeepaliveMs,
-      hostHash: record.fingerprint ? 'sha256' : undefined,
-      hostVerifier: record.fingerprint ? (value) => value === record.fingerprint : undefined,
-    });
+    const profile: SftpProfile = { id: record.id, name: record.name, host: record.host, port: record.port, user: record.user, password: record.password, privateKey: undefined, root: record.paths[0] || ServerValue.DefaultRoot, roots: record.paths, fingerprint: record.fingerprint, maxBytes: record.maxBytes || ServerValue.DefaultMaxBytes, protocol: 'sftp' };
+    return await withSftpSession(profile, async (client) => {
     const paths: ProbePathResult[] = [];
     for (const remotePath of record.paths) {
       try {
@@ -44,9 +36,8 @@ export async function probeSftp(record: RemoteServerRecord): Promise<ProbeResult
       message: failed.length === 0 ? '连接成功，日志路径可访问' : '已连接，但部分日志路径不可用',
       paths,
     };
+    });
   } catch {
     return { ok: false, message: '无法连接到 SFTP 服务器，请检查主机、端口、用户名和密码', paths: [] };
-  } finally {
-    await client.end().catch(() => false);
   }
 }

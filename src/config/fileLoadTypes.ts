@@ -38,6 +38,7 @@ export interface SftpProfileView {
   name: string;
   root: string;
   ready: boolean;
+  host?: string;
   roots?: string[];
   source?: 'env' | 'registry';
   protocol?: 'sftp' | 'smb';
@@ -101,7 +102,7 @@ export class LoadState {
 
 export interface RemoteDirEntry {
   name: string;
-  type: 'file' | 'dir';
+  type: 'file' | 'dir' | 'link';
   size: number;
   modifyTime?: number;
 }
@@ -117,6 +118,7 @@ export class RemoteApiPath {
   static readonly ServerProbe = '/api/sftp/servers/probe';
   static readonly List = '/api/sftp/list';
   static readonly Exec = '/api/sftp/exec';
+  static readonly Stat = '/api/sftp/stat';
   static readonly Downloads = '/api/sftp/downloads';
 
   static task(id: string): string {

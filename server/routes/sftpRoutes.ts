@@ -11,6 +11,7 @@ import { listSmbDir } from '../services/smbList';
 import { execSftpCommand } from '../services/sftpExec';
 import { probeSftp } from '../services/sftpProbe';
 import { probeSmb } from '../services/smbProbe';
+import { withSftpSession } from '../services/remoteSession';
 
 export function registerSftpRoutes(
   app: Express,
@@ -64,15 +65,25 @@ export function registerSftpRoutes(
     }
   });
   app.post(ApiPath.Exec, async (request, response, next) => {
+    const controller = new AbortController();
+    response.on('close', () => { if (!response.writableEnded) controller.abort(); });
     try {
       const profileId = typeof request.body?.profileId === 'string' ? request.body.profileId : '';
       const remotePath = typeof request.body?.path === 'string' ? request.body.path : '';
       const command = typeof request.body?.command === 'string' ? request.body.command : '';
       const resolved = resolveListedProfile(profile, registry, profileId);
-      response.json(await execSftpCommand(resolved, remotePath, command));
+      response.json(await execSftpCommand(resolved, remotePath, command, controller.signal));
     } catch (error) {
       next(error);
     }
+  });
+  app.get(ApiPath.Stat, async (request, response, next) => {
+    try {
+      const resolved = resolveListedProfile(profile, registry, String(request.query.profileId || ''));
+      if (resolved.protocol === 'smb') throw new ServiceError(ApiErrorCode.InvalidRequest, 'SMB 不需要解析符号链接', 400);
+      const stat = await withSftpSession(resolved, (client) => client.stat(String(request.query.path || '/')));
+      response.json({ type: stat.isDirectory ? 'dir' : 'file' });
+    } catch (error) { next(error); }
   });
   app.post(ApiPath.Downloads, (request, response, next) => {
     try {

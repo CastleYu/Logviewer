@@ -32,6 +32,7 @@ export class SftpConfig {
       name: ServerValue.ProfileName,
       root,
       ready: Boolean(profile),
+      host: profile?.host,
       roots: [root],
       source: 'env',
       protocol: 'sftp',

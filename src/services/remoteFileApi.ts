@@ -50,11 +50,16 @@ export class RemoteFileApi {
     return this.json<RemoteDirList>(await fetch(RemoteApiPath.list(profileId, remotePath)));
   }
 
-  static async exec(profileId: string, remotePath: string, command: string): Promise<RemoteExecResult> {
+  static async stat(profileId: string, path: string): Promise<{ type: 'dir' | 'file' }> {
+    return this.json(await fetch(`${RemoteApiPath.Stat}?${new URLSearchParams({ profileId, path })}`));
+  }
+
+  static async exec(profileId: string, remotePath: string, command: string, signal?: AbortSignal): Promise<RemoteExecResult> {
     const response = await fetch(RemoteApiPath.Exec, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profileId, path: remotePath, command }),
+      signal,
     });
     return this.json<RemoteExecResult>(response);
   }

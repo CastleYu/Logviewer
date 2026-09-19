@@ -12,8 +12,6 @@ export async function listSmbDir(profile: SftpProfile, requestedPath: string): P
     ? RemotePath.assertAllowed(requestedPath, roots)
     : path.posix.normalize(roots[0] || ServerValue.DefaultRoot);
   return withSmbTree(profile, async (tree) => {
-    const exists = await tree.exists(smbRelPath(target));
-    if (!exists) throw new ServiceError(ApiErrorCode.FileNotFound, '远程目录不存在', 404);
     let items;
     try {
       items = await tree.readDirectory(smbRelPath(target));

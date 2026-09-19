@@ -34,6 +34,7 @@ export class RemoteRegistry {
       name: server.name,
       root: server.paths[0] || ServerValue.DefaultRoot,
       ready: true,
+      host: server.host,
       roots: [...server.paths],
       source: 'registry' as const,
       protocol: server.protocol,
@@ -94,11 +95,10 @@ export class RemoteRegistry {
   }
 
   private normalize(input: RemoteServerInput, id: string): RemoteServerRecord {
-    const name = this.text(input.name, '名称');
     const host = this.text(input.host, '主机');
+    const name = typeof input.name === 'string' && input.name.trim() ? input.name.trim() : host;
     const user = this.text(input.user, '用户名');
     const password = typeof input.password === 'string' ? input.password : '';
-    if (!password.trim()) throw new ServiceError(ApiErrorCode.InvalidRequest, '请填写密码', 400);
     const protocol = this.protocol(input.protocol);
     const port = this.port(input.port, protocol);
     const paths = this.paths(input.paths);
@@ -141,14 +141,14 @@ export class RemoteRegistry {
   }
 
   private paths(value: unknown): string[] {
-    if (!Array.isArray(value)) throw new ServiceError(ApiErrorCode.InvalidRequest, '请至少填写一个日志路径', 400);
+    if (!Array.isArray(value)) return [ServerValue.DefaultRoot];
     const unique: string[] = [];
     for (const item of value) {
       if (typeof item !== 'string' || !item.trim()) continue;
       const normalized = RemotePath.parse(item);
       if (!unique.includes(normalized)) unique.push(normalized);
     }
-    if (unique.length === 0) throw new ServiceError(ApiErrorCode.InvalidRequest, '请至少填写一个日志路径', 400);
+    if (unique.length === 0) return [ServerValue.DefaultRoot];
     return unique;
   }
 

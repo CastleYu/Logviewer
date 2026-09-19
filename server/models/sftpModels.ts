@@ -23,6 +23,7 @@ export interface PublicSftpProfile {
   name: string;
   root: string;
   ready: boolean;
+  host?: string;
   roots?: string[];
   source?: 'env' | 'registry';
   protocol?: 'sftp' | 'smb';
@@ -40,6 +41,7 @@ export interface DownloadTask {
   totalBytes: number;
   error?: string;
   client?: SftpClient;
+  abort?: () => void;
   cancelled: boolean;
 }
 

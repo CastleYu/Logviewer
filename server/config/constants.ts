@@ -26,6 +26,7 @@ export class ApiPath {
   static readonly ServerProbe = '/api/sftp/servers/probe';
   static readonly List = '/api/sftp/list';
   static readonly Exec = '/api/sftp/exec';
+  static readonly Stat = '/api/sftp/stat';
   static readonly Downloads = '/api/sftp/downloads';
   static readonly Health = '/api/health';
 }

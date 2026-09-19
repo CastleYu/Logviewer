@@ -20,19 +20,16 @@ export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile):
       if (entry.type === 'Directory') throw new ServiceError(ApiErrorCode.NotAFile, '指定路径不是普通文件', 400);
       const size = Number(entry.fileSize) || 0;
       task.totalBytes = size;
-      if (size > profile.maxBytes) {
-        throw new ServiceError(ApiErrorCode.FileTooLarge, `文件超过允许的 ${profile.maxBytes} 字节`, 413);
-      }
       if (task.cancelled) return;
       task.status = DownloadStatus.Downloading;
       const source = await tree.createFileReadStream(remote);
       await new Promise<void>((resolve, reject) => {
         const output = fs.createWriteStream(task.partPath);
+        task.abort = () => { source.destroy?.(); output.destroy(); reject(new Error('download cancelled')); };
         source.on('data', (chunk: Buffer) => {
           task.downloadedBytes += chunk.length;
           if (task.cancelled) {
-            source.destroy?.();
-            output.destroy();
+            task.abort?.();
           }
         });
         source.on('error', reject);
@@ -42,7 +39,7 @@ export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile):
       });
       if (task.cancelled) return;
       const local = fs.statSync(task.partPath);
-      if (task.totalBytes > 0 && local.size !== task.totalBytes) throw new Error('下载文件大小与远程文件不一致');
+      if (local.size !== task.totalBytes) throw new Error('下载文件大小与远程文件不一致');
       fs.renameSync(task.partPath, task.localPath);
       task.downloadedBytes = local.size;
       task.totalBytes = local.size;
@@ -58,5 +55,5 @@ export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile):
       task.status = DownloadStatus.Failed;
       task.error = error instanceof ServiceError ? error.message : 'SMB 下载失败，请检查连接、权限和远程路径';
     }
-  }
+  } finally { task.abort = undefined; }
 }
