@@ -15,6 +15,12 @@ import { SftpConfig } from './config/sftpConfig';
 import { registerErrorRoute, registerSftpRoutes } from './routes/sftpRoutes';
 import { DownloadService } from './services/downloadService';
 import { ListenBackoff } from './services/listenBackoff';
+import { HistoryConst } from '../src/config/historyTypes';
+import { HistoryStore } from './services/historyStore';
+import { registerHistoryRoutes } from './routes/historyRoutes';
+import { AiService } from './services/aiService';
+import { registerAiRoutes } from './routes/aiRoutes';
+import { closeRemoteSessions } from './services/remoteSession';
 
 dotenv.config();
 
@@ -25,7 +31,12 @@ const production = process.argv.includes('--production');
 const host = '127.0.0.1';
 
 app.use(HttpConst.Api, localAccess);
-app.use(express.json({ limit: '32kb' }));
+const history = new HistoryStore(path.join(rootDir, HistoryConst.Store));
+const ai = new AiService(path.join(rootDir, '.logviewer-ai'), history);
+await ai.init();
+registerAiRoutes(app, ai);
+app.use(express.json({ limit: '1mb' }));
+registerHistoryRoutes(app, history);
 const sources = new SourceService(path.join(rootDir, SourceConst.Store));
 await sources.init();
 registerSourceRoutes(app, sources);
@@ -61,3 +72,6 @@ if (port !== preferredPort) {
   process.stdout.write(`HTTP 端口 ${preferredPort} 占用中，改用 ${port}\n`);
 }
 process.stdout.write(`LogViewer running at http://${host}:${port}\n`);
+const shutdown = () => { void Promise.all([ai.close(), closeRemoteSessions()]).finally(() => { server.close(); process.exit(0); }); };
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

@@ -5,6 +5,8 @@ dist/
 coverage/
 .playwright-mcp/
 .logviewer-cache/
+.logviewer-history/
+.logviewer-ai/
 .logviewer-remotes.json
 .DS_Store
 *.log
