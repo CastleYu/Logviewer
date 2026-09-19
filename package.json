@@ -15,6 +15,7 @@
     "verify:history": "tsx scripts/verify-history.ts",
     "verify:ai": "tsx scripts/verify-ai.ts",
     "verify:ai-runtime": "tsx scripts/verify-ai-runtime.ts",
+    "verify:managed": "tsx scripts/verify-managed-process.ts",
     "verify:opencode-live": "tsx scripts/verify-opencode-live.ts",
     "preview": "tsx server/main.ts --production",
     "start": "tsx server/main.ts --production",

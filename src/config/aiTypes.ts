@@ -1,6 +1,20 @@
 export enum AiMode { Isolated = 'isolated', Source = 'source' }
 export enum AiSessionState { Accepted = 'accepted', Busy = 'busy', Idle = 'idle', Aborted = 'aborted', Error = 'error' }
 export enum AiRequestKind { Prompt = 'prompt', Abort = 'abort', Permission = 'permission', Question = 'question' }
+export enum AiConnectStage { Existing = 'existing_unreachable', MissingProgram = 'program_missing', Start = 'start_failed', Exit = 'server_exited', Ready = 'started_unreachable', Closed = 'application_closing' }
+
+export class AiConnectConst {
+  static readonly ProbeMs = 2500;
+  static readonly StartMs = 15000;
+  static readonly PollMs = 100;
+  static readonly Host = '127.0.0.1';
+  static readonly Path = '/path';
+  static readonly PasswordPrefix = 'LOGVIEWER_OPENCODE_PASSWORD_';
+  static readonly Username = 'OPENCODE_SERVER_USERNAME';
+  static readonly Password = 'OPENCODE_SERVER_PASSWORD';
+  static readonly DisableUpdate = 'OPENCODE_DISABLE_AUTOUPDATE';
+  static readonly DisableModels = 'OPENCODE_DISABLE_MODELS_FETCH';
+}
 
 export const AiConst = {
   ConfigFile: 'ai-config.json',
@@ -35,7 +49,9 @@ export const AiRoute = {
 export type AiConfig = {
   endpoint: string;
   executable: string;
-  launch: boolean;
+  /** Legacy persisted field; connection now always tries endpoint before managed fallback. */
+  launch?: boolean;
+  managed?: boolean;
   username?: string;
   passwordEnv?: string;
   providerID?: string;

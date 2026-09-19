@@ -24,6 +24,7 @@ async function main(): Promise<void> {
   let nextSession = 0;
   const app = express();
   app.use(express.json({ limit: '512kb' }));
+  app.get('/path', (req, res) => res.json({ directory: req.query.directory }));
   app.post('/session', (_req, res) => { nextSession += 1; phases.set(`ses_test_${nextSession}`, 'idle'); res.json({ id: `ses_test_${nextSession}` }); });
   app.post('/session/:id/prompt_async', (req, res) => {
     const id = req.params.id;

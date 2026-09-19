@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import type { AiService } from '../services/aiService';
 import { AiConst } from '../../src/config/aiTypes';
+import { AiConnectionError } from '../services/aiConnection';
 
 export function registerAiRoutes(app: Express, service: AiService): void {
   const router = express.Router();
@@ -8,7 +9,7 @@ export function registerAiRoutes(app: Express, service: AiService): void {
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
   router.get('/state', async (_req, res, next) => { try { res.json(await service.state()); } catch (error) { next(error); } });
   router.put('/config', async (req, res, next) => { try { res.json(await service.configure(req.body)); } catch (error) { next(error); } });
-  router.post('/launch', async (_req, res, next) => { try { await service.launch(); res.json(await service.state()); } catch (error) { next(error); } });
+  router.post('/launch', async (_req, res, next) => { try { const connection = await service.launch(); res.json({ ...await service.state(), connection }); } catch (error) { next(error); } });
   router.post('/sessions', async (req, res, next) => { try { res.status(201).json(await service.create(req.body)); } catch (error) { next(error); } });
   router.post('/sessions/:id/prompt', async (req, res, next) => { try { res.json(await service.prompt({ ...req.body, sessionId: req.params.id })); } catch (error) { next(error); } });
   router.post('/sessions/:id/abort', async (req, res, next) => { try { res.json(await service.abort(req.params.id)); } catch (error) { next(error); } });
@@ -17,6 +18,6 @@ export function registerAiRoutes(app: Express, service: AiService): void {
   router.post('/sessions/:id/questions/:requestId/reply', async (req, res, next) => { try { res.json(await service.replyQuestion(req.params.id, req.params.requestId, req.body)); } catch (error) { next(error); } });
   router.post('/sessions/:id/questions/:requestId/reject', async (req, res, next) => { try { res.json(await service.replyQuestion(req.params.id, req.params.requestId, {}, true)); } catch (error) { next(error); } });
   router.get('/sessions/:id/catalogs', async (req, res, next) => { try { res.json(await service.catalogs(req.params.id)); } catch (error) { next(error); } });
-  router.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(400).json({ message: error.message }));
+  router.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(400).json({ message: error.message, ...(error instanceof AiConnectionError ? { stage: error.stage } : {}) }));
   app.use('/api/ai', router);
 }

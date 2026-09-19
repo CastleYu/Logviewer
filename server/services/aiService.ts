@@ -1,8 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import dns from 'node:dns/promises';
-import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { AiClient } from './aiClient';
 import { AiConst, AiMode, AiSessionState, type AiConfig, type AiCreateInput, type AiPromptInput, type AiSession, type AiState } from '../../src/config/aiTypes';
@@ -58,18 +56,9 @@ export class AiService {
 
   async configure(input: Partial<AiConfig>): Promise<AiState['config']> {
     await this.ready();
-    if (input.endpoint) await this.validateEndpoint(input.endpoint);
     this.config = { ...this.config, ...input };
     await this.write(this.configPath(), this.config);
     return this.configView();
-  }
-  private async validateEndpoint(endpoint: string): Promise<void> {
-    const url = new URL(endpoint);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('AI endpoint 必须是无凭据的 HTTP(S) 地址');
-    const host = url.hostname.replace(/^\[|\]$/g, '');
-    const ip = net.isIP(host) ? host : (await dns.lookup(host)).address;
-    const privateIp = ip === '::1' || /^(fc|fd)[0-9a-f]{2}:/i.test(ip) || ip.startsWith('fe80:') || ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('127.') || ip.startsWith('169.254.') || ip.startsWith('172.') && Number(ip.split('.')[1]) >= 16 && Number(ip.split('.')[1]) <= 31;
-    if (!privateIp) throw new Error('AI endpoint 必须解析到 localhost 或内网地址');
   }
   private configView(): AiState['config'] {
     return { ...this.config, passwordConfigured: !!(this.config.passwordEnv && process.env[this.config.passwordEnv]) };
@@ -129,7 +118,7 @@ export class AiService {
     const client = new AiClient(config);
     const remote = await client.createSession(area.directory, `LogViewer ${log.name}`);
     if (typeof remote.id !== 'string' || !remote.id) throw new Error('Agent 返回了无效会话');
-    const session: AiSession = { id: remote.id, logId: input.logId, mode: input.mode, directory: area.directory, repository: area.repository, trackLog: area.trackLog, created: new Date().toISOString(), state: AiSessionState.Idle, messages: [], permissions: [], questions: [], endpoint: config.endpoint, username: config.username, passwordEnv: config.passwordEnv, managed: config.launch, executable: config.executable };
+    const session: AiSession = { id: remote.id, logId: input.logId, mode: input.mode, directory: area.directory, repository: area.repository, trackLog: area.trackLog, created: new Date().toISOString(), state: AiSessionState.Idle, messages: [], permissions: [], questions: [], endpoint: config.endpoint, username: config.username, passwordEnv: config.passwordEnv, managed: config.managed, executable: config.executable };
     this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)];
     await this.persist();
     return session;
@@ -200,13 +189,14 @@ export class AiService {
   async catalogs(id: string): Promise<{ providers: unknown; agents: unknown }> { await this.ready(); const session = this.session(id); const client = this.client(session); return { providers: await client.providers(session.directory), agents: await client.agents(session.directory) }; }
   async refresh(id: string): Promise<AiSession> { await this.ready(); const session = this.session(id); session.error = undefined; this.monitor(session); return session; }
 
-  async launch(): Promise<void> {
+  async launch(): Promise<{ managed: boolean; endpoint: string }> {
     await this.ready();
-    await this.runtime.start(this.root, this.config);
+    const connected = await this.runtime.start(this.root, this.config);
+    return { managed: Boolean(connected.managed), endpoint: connected.endpoint };
   }
   private async ensureRuntime(session: AiSession): Promise<void> {
     if (!session.managed) return;
-    const config = await this.runtime.start(session.directory, { ...this.config, launch: true, executable: session.executable || this.config.executable });
+    const config = await this.runtime.startOwned(session.directory, { ...this.config, executable: session.executable || this.config.executable });
     session.endpoint = config.endpoint; session.username = config.username; session.passwordEnv = config.passwordEnv;
   }
   private monitor(session: AiSession): void {
