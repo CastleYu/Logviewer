@@ -15,6 +15,7 @@ import { sourceField } from '../utils/sourceUtils';
 interface ConfigurableLogTableProps {
   logs: LogEntry[];
   onOpenStack: (log: LogEntry) => void;
+  onAnalyze?: (logs: LogEntry[]) => void;
   optionLogs: LogEntry[];
   format: LogFormatConfig;
   filters: RuntimeFieldFilters;
@@ -70,7 +71,7 @@ function alignClass(field: LogFieldConfig): string {
   return 'text-left justify-start';
 }
 
-export function ConfigurableLogTable({ logs, onOpenStack, optionLogs, format, filters, onFiltersChange, filter, density, theme, selectedIds, onSelectionChange, activeSearchLogId, targetNavLog, onFirstVisibleIndexChange }: ConfigurableLogTableProps) {
+export function ConfigurableLogTable({ logs, onOpenStack, onAnalyze, optionLogs, format, filters, onFiltersChange, filter, density, theme, selectedIds, onSelectionChange, activeSearchLogId, targetNavLog, onFirstVisibleIndexChange }: ConfigurableLogTableProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const feedbackTimerRef = useRef<number | null>(null);
   const [height, setHeight] = useState(600);
@@ -176,7 +177,7 @@ export function ConfigurableLogTable({ logs, onOpenStack, optionLogs, format, fi
         </div>
       </div>
 
-      {contextTarget ? <div role="menu" aria-label="日志复制菜单" style={{ left: contextTarget.x, top: contextTarget.y }} onClick={(event) => event.stopPropagation()} className={`fixed z-[75] w-56 rounded-lg border py-1 shadow-xl ${isLight ? 'border-slate-300 bg-white text-slate-800' : 'border-slate-700 bg-slate-900 text-slate-100'}`}><div className={`border-b px-3 py-1.5 text-[10px] ${isLight ? 'border-slate-200 text-slate-500' : 'border-slate-800 text-slate-400'}`}>{contextLogs.length > 1 ? `已选中 ${contextLogs.length} 行` : `日志 #${contextTarget.log.lineNumber}`}</div><SourceMenuItem log={contextTarget.log} format={format} field={contextTarget.field} light={isLight} onClose={() => setContextTarget(null)} />{contextActions.map((action) => <button key={action.id} type="button" role="menuitem" onClick={async () => { await runCopy(action, contextLogs); setContextTarget(null); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'}`}><Copy className="h-3.5 w-3.5 text-indigo-500" /><span className="truncate">{action.label}</span></button>)}</div> : null}
+      {contextTarget ? <div role="menu" aria-label="日志复制菜单" style={{ left: contextTarget.x, top: contextTarget.y }} onClick={(event) => event.stopPropagation()} className={`fixed z-[75] w-56 rounded-lg border py-1 shadow-xl ${isLight ? 'border-slate-300 bg-white text-slate-800' : 'border-slate-700 bg-slate-900 text-slate-100'}`}><div className={`border-b px-3 py-1.5 text-[10px] ${isLight ? 'border-slate-200 text-slate-500' : 'border-slate-800 text-slate-400'}`}>{contextLogs.length > 1 ? `已选中 ${contextLogs.length} 行` : `日志 #${contextTarget.log.lineNumber}`}</div><SourceMenuItem log={contextTarget.log} format={format} field={contextTarget.field} light={isLight} onClose={() => setContextTarget(null)} />{onAnalyze ? <button type="button" role="menuitem" onClick={() => { onAnalyze(contextLogs); setContextTarget(null); }} className="w-full px-3 py-2 text-left text-xs hover:text-indigo-500">AI 分析选中行</button> : null}{contextActions.map((action) => <button key={action.id} type="button" role="menuitem" onClick={async () => { await runCopy(action, contextLogs); setContextTarget(null); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 ${isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'}`}><Copy className="h-3.5 w-3.5 text-indigo-500" /><span className="truncate">{action.label}</span></button>)}</div> : null}
       {filterTarget ? <ConfiguredFieldFilterPopover field={filterTarget.field} filter={filters[filterTarget.field.id]} options={filterTarget.field.filter.kind === FieldFilterKind.Select && filterTarget.field.filter.options ? filterTarget.field.filter.options : distinctFieldValues(optionLogs, filterTarget.field.id)} anchor={filterTarget.anchor} theme={theme} onApply={(next) => onFiltersChange({ ...filters, [filterTarget.field.id]: next })} onClose={() => setFilterTarget(null)} /> : null}
       {copyTarget ? <CopyActionPopover actions={copyTarget.actions} selectedLogs={selectedLogs} filteredLogs={logs} anchor={copyTarget.anchor} theme={theme} onResult={showFeedback} onClose={() => setCopyTarget(null)} /> : null}
     </div>

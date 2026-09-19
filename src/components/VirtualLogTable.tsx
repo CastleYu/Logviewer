@@ -24,6 +24,7 @@ import {
 interface VirtualLogTableProps {
   logs: LogEntry[];
   onOpenStack: (log: LogEntry) => void;
+  onAnalyze?: (logs: LogEntry[]) => void;
   format: LogFormatConfig;
   density: DisplayDensity;
   columnVisibility: ColumnVisibility;
@@ -144,6 +145,7 @@ function isFilterActive(column: ColumnFilterKey, filter: FilterOptions): boolean
 export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   logs,
   onOpenStack,
+  onAnalyze,
   format,
   density,
   columnVisibility,
@@ -1135,6 +1137,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
 
           <div className="py-0.5">
             <SourceMenuItem log={contextMenu.log} format={format} field={contextMenu.field} light={isLight} onClose={() => setContextMenu(null)} />
+            {onAnalyze ? <button type="button" role="menuitem" onClick={() => { onAnalyze(contextTargetLogs); setContextMenu(null); }} className={`w-full px-3 py-2 text-left text-xs ${isLight ? 'hover:bg-slate-100' : 'hover:bg-slate-800'}`}>AI 分析选中行</button> : null}
             {/* 原文复制 */}
             <button
               onClick={(e) => {

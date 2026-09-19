@@ -27,6 +27,10 @@ import { useSource } from './components/SourceNavigation';
 import { sourceColumns, sourceTarget } from './utils/sourceUtils';
 import { searchText } from './utils/recordEntries';
 import { csvLogs, jsonLogs } from './utils/logExport';
+import { HistoryApi } from './services/historyApi';
+import { HistoryKind, type HistoryLog } from './config/historyTypes';
+import { AiWorkspace } from './components/AiWorkspace';
+import { LocalFileDialog } from './components/LocalFileDialog';
 
 const defaultColumnWidths: ColumnWidths = {
   index: 48,
@@ -89,6 +93,20 @@ export default function App() {
   const [configErrors, setConfigErrors] = useState<ConfigError[]>([]);
   const [source, setSource] = useState<LoadedSource | null>(null);
   const sourceRef = useRef<LoadedSource | null>(null);
+  const [historyLog, setHistoryLog] = useState<HistoryLog | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  const [localPathOpen, setLocalPathOpen] = useState(false);
+  const [aiRequest, setAiRequest] = useState<{ nonce: number; text: string; title: string } | null>(null);
+  const analyzeRows = useCallback((rows: LogEntry[]) => setAiRequest({ nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') }), []);
+
+  const remember = useCallback((loaded: LoadedSource, kind: HistoryKind, origin: string, formatId: string, existing?: HistoryLog) => {
+    setHistoryLog(existing || null);
+    setHistoryError('');
+    if (existing) return;
+    HistoryApi.save({ name: loaded.fileName, origin, kind, formatId }, loaded.content).then((saved) => {
+      if (sourceRef.current === loaded) setHistoryLog(saved);
+    }).catch((cause) => { if (sourceRef.current === loaded) setHistoryError(`历史保存失败：${cause.message}`); });
+  }, []);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<LogStats | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -339,13 +357,14 @@ export default function App() {
   }, [parseSource]);
 
   // 核心：处理文件解析与装载
-  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number, loadId: number) => {
+  const handleLoadContent = useCallback((content: string, fileName: string, fileSize: number, loadId: number, origin?: string, existing?: HistoryLog) => {
     if (fileLoadRef.current.id !== loadId) return;
     const loaded = { content, fileName, fileSize };
     setSource(loaded);
     sourceRef.current = loaded;
+    remember(loaded, fileLoadRef.current.source === LoadSourceKind.Remote ? HistoryKind.Remote : HistoryKind.Local, origin || `浏览器上传 / ${fileName}（未提供完整路径）`, selectedFormat.id, existing);
     parseSource(loaded, selectedFormat, 10, loadId);
-  }, [parseSource, selectedFormat]);
+  }, [parseSource, selectedFormat, remember]);
 
   // 生成并装载示例数据
   const handleLoadSample = useCallback((count: number) => {
@@ -359,8 +378,9 @@ export default function App() {
     setFilter(createFilterOptions(builtin));
     setSource(loaded);
     sourceRef.current = loaded;
+    remember(loaded, HistoryKind.Sample, '内置示例', builtin.id);
     parseSource(loaded, builtin, 20, loadId);
-  }, [beginLoad, formats, parseSource]);
+  }, [beginLoad, formats, parseSource, remember]);
 
   const handleFormatChange = useCallback((formatId: string) => {
     if (isBusy) return;
@@ -400,14 +420,7 @@ export default function App() {
   // 打开本地文件选择器
   const handleSelectFile = () => {
     if (isBusy) return;
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.log,.txt,.out,.csv,.jsonl,.ndjson,application/x-ndjson,text/*';
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) handleFile(file);
-    };
-    input.click();
+    setLocalPathOpen(true);
   };
 
   const handleRemoteLoad = useCallback(async (profileId: string, remotePath: string) => {
@@ -437,7 +450,8 @@ export default function App() {
       }
       if (task.status !== DownloadStatus.Completed) throw new Error(task.error || '远程文件下载未完成');
       const loaded = await RemoteFileApi.content(task.id);
-      handleLoadContent(loaded.content, loaded.name, loaded.size, loadId);
+      const remote = sftpProfiles.find((item) => item.id === profileId);
+      handleLoadContent(loaded.content, loaded.name, loaded.size, loadId, `${remote?.host || remote?.name || profileId}:${remotePath}`);
     } catch (error) {
       failLoad(loadId, error instanceof Error ? error.message : '远程文件加载失败');
     }
@@ -462,6 +476,7 @@ export default function App() {
     setSelectedIds(new Set());
     setSource(null);
     sourceRef.current = null;
+    setHistoryLog(null);
   };
 
   // 全局拖拽支持
@@ -828,6 +843,20 @@ export default function App() {
     setFilter((previous) => ({ ...previous, configuredFilters: createConfiguredFilters(selectedFormat) }));
   };
 
+  const openHistory = async (log: HistoryLog) => {
+    const id = beginLoad(LoadPhase.Reading, LoadSourceKind.Local, log.name, log.size);
+    if (id === null) return;
+    try {
+      const content = await HistoryApi.content(log.id);
+      if (fileLoadRef.current.id !== id) return;
+      const loaded = { content, fileName: log.name, fileSize: log.size };
+      const format = formats.find((item) => item.id === log.formatId) || selectedFormat;
+      setSource(loaded); sourceRef.current = loaded; setHistoryLog(log); setHistoryError('');
+      setSelectedFormatId(format.id); setFilter(createFilterOptions(format));
+      parseSource(loaded, format, 10, id);
+    } catch (cause) { failLoad(id, (cause as Error).message); }
+  };
+
   return (
     <div
       onDragOver={handleGlobalDragOver}
@@ -874,6 +903,9 @@ export default function App() {
         onCancel={handleCancelLoad}
         onDismiss={() => publishLoad(LoadState.idle())}
       />
+      <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
+      {historyError ? <div role="alert" className="px-4 py-2 text-xs text-rose-600">{historyError}</div> : null}
+      {localPathOpen ? <LocalFileDialog theme={theme} formatId={selectedFormat.id} onOpen={(log) => void openHistory(log)} onClose={() => setLocalPathOpen(false)} /> : null}
 
       {/* 主面板内容区 */}
       {logs.length === 0 ? (
@@ -930,6 +962,7 @@ export default function App() {
 
           {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
           {selectedFormat.builtin ? <VirtualLogTable
+            onAnalyze={analyzeRows}
             onOpenStack={openStack}
             logs={filteredLogs}
             format={selectedFormat}
@@ -961,6 +994,7 @@ export default function App() {
             legacyBoldSelection={legacyBoldSelection}
             legacyHighlightStyle={legacyHighlightStyle}
           /> : <ConfigurableLogTable
+            onAnalyze={analyzeRows}
             onOpenStack={openStack}
             logs={filteredLogs}
             optionLogs={logs}
