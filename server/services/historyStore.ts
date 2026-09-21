@@ -43,8 +43,8 @@ export class HistoryStore {
     return this.save({ name: path.basename(file), origin: file, kind: HistoryKind.Local, formatId }, content);
   }
 
-  async update(id: string, patch: Pick<HistoryLog, 'repository'>): Promise<HistoryLog> {
-    const log = { ...await this.get(id), repository: patch.repository };
+  async update(id: string, patch: Pick<HistoryLog, 'repository' | 'sourceAnchor'>): Promise<HistoryLog> {
+    const log = { ...await this.get(id), ...patch };
     await this.write(log);
     return log;
   }

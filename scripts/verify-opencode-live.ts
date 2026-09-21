@@ -6,6 +6,14 @@ import net from 'node:net';
 import http from 'node:http';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
+import express from 'express';
+import { registerAiRoutes } from '../server/routes/aiRoutes';
+import { AiService } from '../server/services/aiService';
+import { HistoryStore } from '../server/services/historyStore';
+import { SourceService } from '../server/services/sourceService';
+import { AiDiagnosis } from '../src/config/aiDiagnosis';
+import { AiMode } from '../src/config/aiTypes';
+import { HistoryKind } from '../src/config/historyTypes';
 
 const exec = promisify(execFile);
 const qaRoot = path.resolve('.logviewer-cache', 'opencode-qa');
@@ -46,13 +54,18 @@ async function stop(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve) => { child.once('exit', () => resolve()); setTimeout(resolve, 3_000); });
 }
 
-async function startFixture(): Promise<{ server: http.Server; port: number; calls: string[] }> {
+async function startFixture(): Promise<{ server: http.Server; port: number; calls: string[]; directories: string[] }> {
   const calls: string[] = [];
+  const directories: string[] = [];
   const server = http.createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/v1/chat/completions') { response.writeHead(404); response.end(); return; }
     let body = '';
     for await (const chunk of request) body += String(chunk);
     calls.push(body);
+    const requestUrl = new URL(request.url || '/', 'http://127.0.0.1');
+    const directory = requestUrl.searchParams.get('directory');
+    if (directory) directories.push(directory);
+    await sleep(200);
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     const id = 'chatcmpl-logviewer-fixture';
     response.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'diagnostic', choices: [{ index: 0, delta: { role: 'assistant', content: 'local model fixture response' }, finish_reason: null }] })}\n\n`);
@@ -62,7 +75,71 @@ async function startFixture(): Promise<{ server: http.Server; port: number; call
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
   const address = server.address();
   assert(address && typeof address !== 'string');
-  return { server, port: address.port, calls };
+  return { server, port: address.port, calls, directories };
+}
+
+async function verifyServiceChain(endpoint: string, username: string, passwordEnv: string, fixture: { calls: string[]; directories: string[] }): Promise<Record<string, unknown>> {
+  const root = await fs.mkdtemp(path.join(qaRoot, 'service-chain-'));
+  const oldPassword = process.env[passwordEnv];
+  process.env[passwordEnv] = 'qa-password-only-runtime';
+  let server: http.Server | undefined;
+  let service: AiService | undefined;
+  try {
+    const history = new HistoryStore(path.join(root, 'history'));
+    const log = await history.save({ name: 'service-chain-fixture.log', origin: 'fixture://service-chain', kind: HistoryKind.Sample, formatId: 'legacy-standard' }, '[2026-09-21T10:00:00Z] ERROR local model fixture\n');
+    const repository = path.join(root, 'enterprise-service');
+    const sourceDir = path.join(repository, 'src');
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, 'service.ts'), 'export function run() { throw new Error("local model fixture"); }\n');
+    await exec('git', ['init', '--quiet', repository], { windowsHide: true });
+    const sources = new SourceService(path.join(root, 'source.json'), undefined, async () => []);
+    await sources.rebuild({ roots: [sourceDir], openers: [] });
+    service = new AiService(path.join(root, 'ai'), history, { sources });
+    await service.init();
+    await service.configure({ endpoint, executable: 'fixture-opencode', launch: false, username, passwordEnv, providerID: 'internal', modelID: 'diagnostic' });
+    const app = express();
+    app.use(express.json());
+    registerAiRoutes(app, service);
+    server = await new Promise<http.Server>((resolve, reject) => { const item = app.listen(0, '127.0.0.1', () => resolve(item)); item.once('error', reject); });
+    const address = server.address(); assert(address && typeof address !== 'string');
+    const api = `http://127.0.0.1:${address.port}/api/ai`;
+    const create = await fetch(`${api}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ logId: log.id, targets: [{ file: 'service.ts', line: 1 }] }) });
+    assert.equal(create.status, 201);
+    const session = await create.json() as { id: string; directory: string };
+    assert.ok(session.id); assert.equal(session.directory, await fs.realpath(repository));
+    assert.equal((await history.get(log.id)).repository, session.directory);
+    const directoryProbe = await fetch(`${endpoint}/path?directory=${encodeURIComponent(session.directory)}`, { headers: { authorization: auth(username, 'qa-password-only-runtime') } });
+    assert.equal(directoryProbe.status, 200);
+    const directoryBody = await directoryProbe.json() as { directory?: string };
+    assert.equal(directoryBody.directory, session.directory);
+    const prompt = (value: string) => fetch(`${api}/sessions/${encodeURIComponent(session.id)}/prompt`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: value, model: { providerID: 'internal', modelID: 'diagnostic' } }) });
+    const first = await prompt('service chain first prompt'); assert.equal(first.ok, true);
+    const second = await prompt('service chain queued second prompt'); assert.equal(second.ok, true);
+    let final: { id?: string; state?: string; error?: string; messages?: unknown[]; queue?: unknown[]; directory?: string; lastPrompt?: { prompt?: string } } | undefined;
+    for (let index = 0; index < 160; index += 1) {
+      const state = await (await fetch(`${api}/state`)).json() as { sessions: typeof final[] };
+      final = state.sessions.find((item) => item?.id === session.id) as typeof final;
+      if (final?.state === 'idle' && final.messages?.some((item) => (item as { info?: { role?: string }; parts?: { type?: string; text?: string }[] }).info?.role === 'assistant')) break;
+      await sleep(250);
+    }
+    assert(final);
+    const assistantText = (final.messages || []).flatMap((item) => (item as { info?: { role?: string }; parts?: { type?: string; text?: string }[] }).info?.role === 'assistant' ? ((item as { parts?: { type?: string; text?: string } }).parts || []) : []).filter((part) => part.type === 'text').map((part) => part.text || '').join('');
+    assert.match(assistantText, /local model fixture response/);
+    assert.equal(final.state, 'idle'); assert.equal(final.error, undefined); assert.equal(final.queue?.length || 0, 0); assert.equal(final.lastPrompt?.prompt, 'service chain queued second prompt');
+    for (const call of fixture.calls.slice(1)) {
+      const body = JSON.parse(call) as { messages: unknown[] };
+      const messages = JSON.stringify(body.messages);
+      assert.ok(messages.includes(JSON.stringify(AiDiagnosis.Core).slice(1, -1)), 'mandatory diagnosis system must reach the actual model provider');
+      assert.ok(messages.includes('service.ts'));
+      assert.ok(messages.includes('content.txt'));
+    }
+    return { logId: log.id, sessionId: session.id, mode: AiMode.Source, directory: session.directory, sourceIndexBound: true, diagnosisReachedModel: true, openCodeDirectoryMatched: directoryBody.directory === session.directory, state: final.state, queueLength: final.queue?.length || 0, lastPrompt: final.lastPrompt?.prompt, assistantText, fixtureCallsAfterDirect: fixture.calls.length, servicePromptCount: fixture.calls.length - 1 };
+  } finally {
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (service) await service.close();
+    await fs.rm(root, { recursive: true, force: true });
+    if (oldPassword === undefined) delete process.env[passwordEnv]; else process.env[passwordEnv] = oldPassword;
+  }
 }
 
 async function main(): Promise<void> {
@@ -116,6 +193,9 @@ async function main(): Promise<void> {
     const unauth = await waitFor(`${endpoint}/path?directory=${encodeURIComponent(directory)}`, {}, 30_000);
     assert.equal(unauth.status, 401);
     checks.authRequired = true;
+    const wrongAuth = await fetch(`${endpoint}/path?directory=${encodeURIComponent(directory)}`, { headers: { authorization: auth(username, 'wrong-password') } });
+    assert.equal(wrongAuth.status, 401);
+    checks.wrongPasswordRejected = true;
     const pathResponse = await waitFor(`${endpoint}/path?directory=${encodeURIComponent(directory)}`, { headers });
     const pathBody = await pathResponse.json() as { directory?: string; worktree?: string };
     assert.equal(pathBody.directory, directory);
@@ -176,6 +256,9 @@ async function main(): Promise<void> {
     assert.equal(requestBody.model, 'diagnostic');
     assert.ok(Array.isArray(requestBody.messages) && requestBody.messages.length > 0);
     checks.promptAsyncFixture = { status: prompted.status, fixtureCalls: fixture.calls.length, assistantText };
+    const serviceChain = await verifyServiceChain(endpoint, username, 'LOGVIEWER_LIVE_QA_PASSWORD', fixture);
+    checks.aiServiceChain = serviceChain;
+    assert.equal(fixture.calls.length, 3, 'direct OpenCode and two AiService prompts should call the fixture exactly three times');
     const doc = await fetch(`${endpoint}/doc?directory=${encodeURIComponent(directory)}`, { headers });
     assert.equal(doc.ok, true);
     checks.openapi = doc.status;

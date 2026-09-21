@@ -1,3 +1,5 @@
+import type { SourceTarget } from './sourceTypes';
+
 export enum HistoryKind { Local = 'local', Remote = 'remote', Sample = 'sample' }
 
 export interface HistoryLog {
@@ -9,6 +11,7 @@ export interface HistoryLog {
   size: number;
   formatId: string;
   repository?: string;
+  sourceAnchor?: SourceTarget;
 }
 
 export class HistoryConst {

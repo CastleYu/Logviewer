@@ -29,7 +29,8 @@ import { searchText } from './utils/recordEntries';
 import { csvLogs, jsonLogs } from './utils/logExport';
 import { HistoryApi } from './services/historyApi';
 import { HistoryKind, type HistoryLog } from './config/historyTypes';
-import { AiWorkspace } from './components/AiWorkspace';
+import { AiWorkspace, type AiWorkspaceRequest } from './components/AiWorkspace';
+import { AiConst } from './config/aiTypes';
 import { LocalFileDialog } from './components/LocalFileDialog';
 
 const defaultColumnWidths: ColumnWidths = {
@@ -96,8 +97,11 @@ export default function App() {
   const [historyLog, setHistoryLog] = useState<HistoryLog | null>(null);
   const [historyError, setHistoryError] = useState('');
   const [localPathOpen, setLocalPathOpen] = useState(false);
-  const [aiRequest, setAiRequest] = useState<{ nonce: number; text: string; title: string } | null>(null);
-  const analyzeRows = useCallback((rows: LogEntry[]) => setAiRequest({ nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') }), []);
+  const [aiRequest, setAiRequest] = useState<AiWorkspaceRequest | null>(null);
+  const analyzeRows = useCallback((rows: LogEntry[]) => {
+    if (!historyLog) { setHistoryError('日志快照尚未保存，请稍后重试分析。'); return; }
+    setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') });
+  }, [historyLog?.id]);
 
   const remember = useCallback((loaded: LoadedSource, kind: HistoryKind, origin: string, formatId: string, existing?: HistoryLog) => {
     setHistoryLog(existing || null);
@@ -650,6 +654,23 @@ export default function App() {
     }
     return names;
   }, [filteredLogs, selectedFormat, sourceNav.columns]);
+  const sourceTargets = useMemo(() => {
+    const cols = sourceColumns(selectedFormat, sourceNav.columns);
+    const seen = new Set<string>();
+    const targets = [] as Array<{ file: string; line: number }>;
+    for (const entry of logs) {
+      const target = sourceTarget(entry, cols);
+      if (!target.file || target.file === '-' || seen.has(target.file)) continue;
+      seen.add(target.file); targets.push(target);
+      if (targets.length >= AiConst.MaxSourceTargets) break;
+    }
+    return targets;
+  }, [logs, selectedFormat, sourceNav.columns]);
+  const bindRepository = useCallback((repository: string) => {
+    const id = historyLog?.id;
+    if (!id) return;
+    setHistoryLog((old) => old?.id === id ? { ...old, repository } : old);
+  }, [historyLog?.id]);
 
   // 计算全文搜索匹配的日志 ID 列表 (支持指定单列/多列与全文搜索，用于定位导航与条数统计)
   const searchMatchLogIds = useMemo(() => {
@@ -903,7 +924,7 @@ export default function App() {
         onCancel={handleCancelLoad}
         onDismiss={() => publishLoad(LoadState.idle())}
       />
-      <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
+      <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
       {historyError ? <div role="alert" className="px-4 py-2 text-xs text-rose-600">{historyError}</div> : null}
       {localPathOpen ? <LocalFileDialog theme={theme} formatId={selectedFormat.id} onOpen={(log) => void openHistory(log)} onClose={() => setLocalPathOpen(false)} /> : null}
 

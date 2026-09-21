@@ -32,13 +32,13 @@ const host = '127.0.0.1';
 
 app.use(HttpConst.Api, localAccess);
 const history = new HistoryStore(path.join(rootDir, HistoryConst.Store));
-const ai = new AiService(path.join(rootDir, '.logviewer-ai'), history);
+const sources = new SourceService(path.join(rootDir, SourceConst.Store));
+await sources.init();
+const ai = new AiService(path.join(rootDir, '.logviewer-ai'), history, { sources });
 await ai.init();
 registerAiRoutes(app, ai);
 app.use(express.json({ limit: '1mb' }));
 registerHistoryRoutes(app, history);
-const sources = new SourceService(path.join(rootDir, SourceConst.Store));
-await sources.init();
 registerSourceRoutes(app, sources);
 const sftpProfile = SftpConfig.load();
 const registry = new RemoteRegistry(path.join(rootDir, ServerValue.RegistryFile));

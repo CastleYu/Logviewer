@@ -1,6 +1,6 @@
 import express, { type Express } from 'express';
 import type { AiService } from '../services/aiService';
-import { AiConst } from '../../src/config/aiTypes';
+import { AiConst, AiRoute } from '../../src/config/aiTypes';
 import { AiConnectionError } from '../services/aiConnection';
 
 export function registerAiRoutes(app: Express, service: AiService): void {
@@ -11,8 +11,12 @@ export function registerAiRoutes(app: Express, service: AiService): void {
   router.put('/config', async (req, res, next) => { try { res.json(await service.configure(req.body)); } catch (error) { next(error); } });
   router.post('/launch', async (_req, res, next) => { try { const connection = await service.launch(); res.json({ ...await service.state(), connection }); } catch (error) { next(error); } });
   router.post('/sessions', async (req, res, next) => { try { res.status(201).json(await service.create(req.body)); } catch (error) { next(error); } });
+  router.post(AiRoute.Repository, async (req, res, next) => { try { res.json(await service.repository(req.body)); } catch (error) { next(error); } });
   router.post('/sessions/:id/prompt', async (req, res, next) => { try { res.json(await service.prompt({ ...req.body, sessionId: req.params.id })); } catch (error) { next(error); } });
   router.post('/sessions/:id/abort', async (req, res, next) => { try { res.json(await service.abort(req.params.id)); } catch (error) { next(error); } });
+  router.post('/sessions/:id/queue/resume', async (req, res, next) => { try { res.json(await service.resume(req.params.id)); } catch (error) { next(error); } });
+  router.delete('/sessions/:id/queue/:itemId', async (req, res, next) => { try { res.json(await service.removeQueue(req.params.id, req.params.itemId)); } catch (error) { next(error); } });
+  router.post('/sessions/:id/terminal', async (req, res, next) => { try { res.json(await service.openTerminal(req.params.id)); } catch (error) { next(error); } });
   router.post('/sessions/:id/refresh', async (req, res, next) => { try { res.json(await service.refresh(req.params.id)); } catch (error) { next(error); } });
   router.post('/sessions/:id/permissions/:requestId/reply', async (req, res, next) => { try { res.json(await service.replyPermission(req.params.id, req.params.requestId, req.body)); } catch (error) { next(error); } });
   router.post('/sessions/:id/questions/:requestId/reply', async (req, res, next) => { try { res.json(await service.replyQuestion(req.params.id, req.params.requestId, req.body)); } catch (error) { next(error); } });

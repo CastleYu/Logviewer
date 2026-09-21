@@ -59,3 +59,4 @@ export interface SourceState extends SourceConfig {
 export interface SourceMatch { path: string; openerId: string | null; openerName: string | null; ready: boolean }
 export interface SourceColumns { file: string; line: string }
 export interface SourceTarget { file: string; line: number }
+export interface SourceRepository { repository: string; file: string; line: number }

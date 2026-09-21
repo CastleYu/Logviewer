@@ -3,7 +3,7 @@ import type { AiQuestion } from '../config/aiTypes';
 
 interface Question { header?: string; question: string; options?: { label: string; description?: string }[]; multiple?: boolean; custom?: boolean }
 
-export const AiQuestionForm: React.FC<{ question: AiQuestion; onSubmit: (answers: string[][]) => Promise<void>; onReject: () => Promise<void> }> = ({ question, onSubmit, onReject }) => {
+export const AiQuestionForm: React.FC<{ question: AiQuestion; light?: boolean; onSubmit: (answers: string[][]) => Promise<void>; onReject: () => Promise<void> }> = ({ question, light = true, onSubmit, onReject }) => {
   const items = (Array.isArray(question.questions) ? question.questions : []) as Question[];
   const [answers, setAnswers] = useState<string[][]>(() => items.map(() => []));
   const [custom, setCustom] = useState<string[]>(() => items.map(() => ''));
@@ -11,10 +11,10 @@ export const AiQuestionForm: React.FC<{ question: AiQuestion; onSubmit: (answers
   const [busy, setBusy] = useState(false);
   const run = async (reject: boolean) => {
     setBusy(true); setError('');
-    try { if (reject) await onReject(); else await onSubmit(answers.map((answer, index) => custom[index]?.trim() ? [...answer, custom[index].trim()] : answer)); }
+    try { if (reject) await onReject(); else await onSubmit(answers.map((answer, index) => custom[index]?.trim() ? items[index].multiple ? [...answer, custom[index].trim()] : [custom[index].trim()] : answer)); }
     catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
   };
-  return <form className="mt-2 max-h-60 overflow-auto rounded-lg bg-indigo-50 p-3 text-xs text-indigo-950" onSubmit={(event) => { event.preventDefault(); void run(false); }}>
+  return <form className={`mt-2 max-h-60 overflow-auto rounded-lg p-3 text-xs ${light ? 'bg-indigo-50 text-indigo-950' : 'bg-indigo-950/50 text-indigo-100'}`} onSubmit={(event) => { event.preventDefault(); void run(false); }}>
     {items.map((item, index) => <fieldset key={index} className="mb-3">
       <legend className="font-semibold">{item.header || item.question}</legend><p className="my-1">{item.question}</p>
       {item.options?.map((option) => <label key={option.label} className="my-1 flex items-start gap-2">

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { SourceConfig, SourceConst, SourceMatch, SourceOpener, SourcePreset, SourceRootInfo, SourceState } from '../../src/config/sourceTypes';
+import { SourceConfig, SourceConst, SourceMatch, SourceOpener, SourcePreset, SourceRepository, SourceRootInfo, SourceState, SourceTarget } from '../../src/config/sourceTypes';
 import { detectPresetOpeners } from './ideDetect';
 import { openerLaunchArgs } from '../../src/utils/openerLaunch';
 import { matchOpener } from '../../src/utils/openerMatch';
@@ -291,6 +291,69 @@ export class SourceService {
       return { path: item, openerId: opener?.id || null, openerName: opener?.name || null, ready: !!opener?.exe };
     });
   }
+
+  async repositories(targets: SourceTarget[]): Promise<SourceRepository[]> {
+    for (const target of targets) {
+      if (!target || typeof target.file !== 'string' || !target.file.trim() || target.file.trim().startsWith('-')) continue;
+      const matches = this.lookup(target.file);
+      const suffix = target.file.replaceAll('\\', '/').replace(/^\/+/, '').toLowerCase();
+      const narrowed = matches.filter((item) => {
+        const candidate = item.path.replaceAll('\\', '/').toLowerCase();
+        return candidate === suffix || candidate.endsWith(`/${suffix}`);
+      });
+      const candidates = narrowed.length ? narrowed : matches;
+      const found = await this.repositoriesFor(candidates, target.line);
+      if (found.length) return found;
+    }
+    return [];
+  }
+
+  async repository(directory: string): Promise<string> {
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw new SourceError('源码目录必须是绝对路径');
+    const real = await fs.realpath(directory).catch(() => { throw new SourceError(`目录不存在：${directory}`); });
+    if (!(await fs.stat(real)).isDirectory()) throw new SourceError(`不是目录：${directory}`);
+    const root = await this.gitRoot(real);
+    return root || real;
+  }
+
+  private async repositoriesFor(matches: SourceMatch[], line: number): Promise<SourceRepository[]> {
+    const anchorLine = Number.isSafeInteger(line) && line > 0 ? line : 0;
+    const result: SourceRepository[] = [];
+    const seen = new Set<string>();
+    for (const match of matches) {
+      const candidate = await this.validIndexedFile(match.path);
+      if (!candidate) continue;
+      const repository = await this.gitRoot(path.dirname(candidate)) || this.fallbackRoot(candidate);
+      if (!repository || seen.has(this.pathKey(repository))) continue;
+      seen.add(this.pathKey(repository));
+      result.push({ repository, file: candidate, line: anchorLine });
+    }
+    return result;
+  }
+
+  private async validIndexedFile(file: string): Promise<string | null> {
+    const real = await fs.realpath(file).catch(() => null);
+    if (!real || this.pathKey(path.normalize(real)) !== this.pathKey(path.normalize(file)) || !(await fs.stat(real).catch(() => null))?.isFile()) return null;
+    return this.config.roots.some((root) => this.inside(root, real)) ? real : null;
+  }
+
+  private fallbackRoot(file: string): string | null {
+    return this.config.roots.filter((root) => this.inside(root, file)).sort((a, b) => b.length - a.length)[0] || null;
+  }
+
+  private async gitRoot(directory: string): Promise<string | null> {
+    let current = directory;
+    while (true) {
+      const marker = path.join(current, '.git');
+      const info = await fs.stat(marker).catch(() => null);
+      if (info && (info.isDirectory() || info.isFile())) return current;
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+
+  private pathKey(value: string): string { return process.platform === 'win32' ? value.toLowerCase() : value; }
 
   async open(file: unknown, target: unknown, line: unknown, openerId?: unknown): Promise<{ message: string }> {
     if (typeof file !== 'string' || typeof target !== 'string' || !Number.isSafeInteger(line) || Number(line) < 1 || Number(line) > 2147483647) throw new SourceError('文件或源码行号无效');
