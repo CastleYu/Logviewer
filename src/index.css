@@ -2,15 +2,103 @@
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/code/dist/*.js";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * 设计令牌：石墨中性色 + 钴蓝强调色。
+ * 1) 语义色（canvas/surface/line/ink/accent）供新组件直接使用，深浅主题通过 .dark 覆盖，无需三元表达式；
+ * 2) 重映射 slate / indigo 色阶，让旧组件整体换到同一套石墨 + 钴蓝视觉。
+ */
 @theme {
-  --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+  --font-sans: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', -apple-system, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, 'Microsoft YaHei UI', monospace;
+
+  --color-canvas: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-raised: #f9fafb;
+  --color-sunken: #eceef2;
+  --color-line: #e2e5ea;
+  --color-line-strong: #cbd0d8;
+  --color-ink: #15171c;
+  --color-ink-2: #474d58;
+  --color-ink-3: #7b828e;
+  --color-accent: #3554d1;
+  --color-accent-hover: #2944b8;
+  --color-accent-soft: #eaeefc;
+  --color-accent-ink: #2a3fa0;
+  --color-danger: #d4344a;
+  --color-danger-soft: #fdecee;
+  --color-ok: #138a5a;
+  --color-ok-soft: #e6f5ee;
+  --color-warn: #b7660b;
+  --color-warn-soft: #fdf3e3;
+
+  --color-slate-50: #f8f9fa;
+  --color-slate-100: #f1f2f5;
+  --color-slate-200: #e2e5ea;
+  --color-slate-300: #cbd0d8;
+  --color-slate-400: #9aa1ad;
+  --color-slate-500: #6f7682;
+  --color-slate-600: #535965;
+  --color-slate-700: #363b45;
+  --color-slate-800: #252931;
+  --color-slate-900: #171a20;
+  --color-slate-950: #0e1014;
+
+  --color-indigo-50: #eef1fd;
+  --color-indigo-100: #dfe5fb;
+  --color-indigo-200: #c3cdf7;
+  --color-indigo-300: #9eaef0;
+  --color-indigo-400: #7a8fe8;
+  --color-indigo-500: #5371de;
+  --color-indigo-600: #3554d1;
+  --color-indigo-700: #2944b8;
+  --color-indigo-800: #243a91;
+  --color-indigo-900: #1f3270;
+  --color-indigo-950: #141e45;
+
+  --radius-ctl: 7px;
+  --shadow-pop: 0 1px 2px rgb(15 17 22 / 0.06), 0 12px 32px -8px rgb(15 17 22 / 0.22);
+  --shadow-window: 0 2px 6px rgb(15 17 22 / 0.08), 0 28px 64px -16px rgb(15 17 22 / 0.35);
+}
+
+.dark {
+  --color-canvas: #0e1014;
+  --color-surface: #15181d;
+  --color-raised: #1a1d23;
+  --color-sunken: #101216;
+  --color-line: #262a32;
+  --color-line-strong: #343944;
+  --color-ink: #e8eaef;
+  --color-ink-2: #aab0bb;
+  --color-ink-3: #737a86;
+  --color-accent: #6f87f0;
+  --color-accent-hover: #8599f4;
+  --color-accent-soft: #1c2440;
+  --color-accent-ink: #a9b8f7;
+  --color-danger: #f0677a;
+  --color-danger-soft: #3a1820;
+  --color-ok: #3ec98d;
+  --color-ok-soft: #12291f;
+  --color-warn: #f0aa4f;
+  --color-warn-soft: #2f2210;
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 36px -8px rgb(0 0 0 / 0.6);
+  --shadow-window: 0 2px 8px rgb(0 0 0 / 0.45), 0 30px 70px -16px rgb(0 0 0 / 0.75);
 }
 
 @layer base {
   :root {
-    --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+    --font-sans: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', -apple-system, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, 'Microsoft YaHei UI', monospace;
+  }
+
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
   }
 
   html, body {
@@ -27,6 +115,62 @@
     font-variant-numeric: tabular-nums lining-nums;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "zero", "ss01", "ss03", "calt", "liga";
   }
+}
+
+/* 基础控件：新组件统一使用，避免每处重复深浅主题三元表达式 */
+@layer components {
+  .lv-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 30px; padding: 0 10px; border-radius: var(--radius-ctl);
+    font-size: 12px; font-weight: 550; white-space: nowrap;
+    color: var(--color-ink-2); background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    transition: background-color .12s, border-color .12s, color .12s;
+  }
+  .lv-btn:hover:not(:disabled) { background: var(--color-raised); border-color: var(--color-line-strong); color: var(--color-ink); }
+  .lv-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .lv-btn-primary { color: #fff; background: var(--color-accent); border-color: transparent; }
+  .lv-btn-primary:hover:not(:disabled) { color: #fff; background: var(--color-accent-hover); border-color: transparent; }
+  .lv-btn-ghost { background: transparent; border-color: transparent; }
+  .lv-btn-ghost:hover:not(:disabled) { background: var(--color-sunken); border-color: transparent; }
+  .lv-btn-danger { color: var(--color-danger); }
+  .lv-btn-danger:hover:not(:disabled) { background: var(--color-danger-soft); color: var(--color-danger); border-color: transparent; }
+  .lv-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: var(--radius-ctl);
+    color: var(--color-ink-3); transition: background-color .12s, color .12s;
+  }
+  .lv-icon-btn:hover:not(:disabled) { background: var(--color-sunken); color: var(--color-ink); }
+  .lv-icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+  .lv-icon-btn[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent-ink); }
+  .lv-input {
+    height: 30px; width: 100%; min-width: 0; padding: 0 10px; border-radius: var(--radius-ctl);
+    font-size: 12px; color: var(--color-ink); background: var(--color-surface);
+    border: 1px solid var(--color-line); outline: none;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .lv-input::placeholder { color: var(--color-ink-3); }
+  .lv-input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent); }
+  .lv-input:disabled { opacity: .55; }
+  .lv-label { display: block; margin-bottom: 5px; font-size: 11.5px; font-weight: 600; color: var(--color-ink-2); }
+  .lv-kbd {
+    display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: 4px;
+    font: 500 10px var(--font-mono); color: var(--color-ink-3);
+    background: var(--color-sunken); border: 1px solid var(--color-line);
+  }
+  .lv-menu {
+    border-radius: 10px; padding: 4px; background: var(--color-surface);
+    border: 1px solid var(--color-line); box-shadow: var(--shadow-pop); color: var(--color-ink);
+  }
+  .lv-menu-item {
+    display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+    font-size: 12px; text-align: left; color: var(--color-ink-2);
+  }
+  .lv-menu-item:hover:not(:disabled), .lv-menu-item[data-active="true"] { background: var(--color-sunken); color: var(--color-ink); }
+  .lv-menu-item:disabled { opacity: .4; cursor: not-allowed; }
+  .lv-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--color-sunken); }
+  .lv-seg > button { height: 24px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; font-weight: 550; color: var(--color-ink-3); }
+  .lv-seg > button[aria-pressed="true"] { background: var(--color-surface); color: var(--color-ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
 }
 
 /* Glassmorphism & Subtle Glows */

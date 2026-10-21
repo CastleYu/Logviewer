@@ -67,3 +67,35 @@ export function logDirectory(roots: string[]): string {
 export function denyOutsideRoots(pathValue: string, roots: string[]): string | null {
   return null;
 }
+
+/** 解析用户在路径栏输入的内容：支持绝对路径、相对当前目录、`~` 主目录、`..`。 */
+export function resolveInput(current: string, input: string, home = '/'): string {
+  const value = input.trim();
+  if (!value) return normalizeRemotePath(current);
+  if (value === '~') return normalizeRemotePath(home);
+  if (value.startsWith('~/')) return joinRemotePath(home, value.slice(2));
+  if (value.startsWith('/')) return normalizeRemotePath(value);
+  return joinRemotePath(current, value);
+}
+
+/** 长路径中间省略，保留根附近与末尾目录，末尾目录最能说明“当前在哪”。 */
+export function middleEllipsis(value: string, max = 48): string {
+  if (value.length <= max) return value;
+  const parts = value.split('/');
+  const last = parts.pop() || '';
+  if (last.length + 4 >= max) return `…${last.slice(-(max - 1))}`;
+  let head = parts.slice(0, 2).join('/');
+  let tail = `/${last}`;
+  for (let index = parts.length - 1; index >= 2; index -= 1) {
+    const next = `/${parts[index]}${tail}`;
+    if (head.length + next.length + 2 > max) break;
+    tail = next;
+  }
+  if (head.length + tail.length + 2 > max) head = parts[0] || '';
+  return `${head}/…${tail}`;
+}
+
+export function baseName(value: string): string {
+  const normalized = normalizeRemotePath(value);
+  return normalized === '/' ? '/' : normalized.slice(normalized.lastIndexOf('/') + 1);
+}

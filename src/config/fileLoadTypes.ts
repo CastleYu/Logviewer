@@ -216,3 +216,12 @@ export class RemoteStoreKey {
   static readonly Window = 'LOGVIEWER_REMOTE_WINDOW';
   static readonly History = 'LOGVIEWER_REMOTE_CMD_HISTORY';
 }
+
+export enum EntryAction {
+  Open = 'open',
+  Tail = 'tail',
+  Save = 'save',
+  Insert = 'insert',
+  Copy = 'copy',
+  Grep = 'grep',
+}
