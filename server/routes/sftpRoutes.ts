@@ -6,12 +6,12 @@ import { SftpConfig } from '../config/sftpConfig';
 import type { RemoteServerInput } from '../models/remoteModels';
 import type { SftpProfile } from '../models/sftpModels';
 import { DownloadService, ServiceError } from '../services/downloadService';
-import { listSftpDir } from '../services/sftpList';
+import { listSftpDir, sftpHome, statSftp } from '../services/sftpList';
 import { listSmbDir } from '../services/smbList';
-import { execSftpCommand } from '../services/sftpExec';
+import { execSftpCommand, streamSftpCommand } from '../services/sftpExec';
+import { RemoteError } from '../services/remoteError';
 import { probeSftp } from '../services/sftpProbe';
 import { probeSmb } from '../services/smbProbe';
-import { withSftpSession } from '../services/remoteSession';
 
 export function registerSftpRoutes(
   app: Express,
@@ -41,9 +41,60 @@ export function registerSftpRoutes(
   app.post(ApiPath.ServerProbe, async (request, response, next) => {
     try {
       const record = registry.preview(bodyAsInput(request.body));
-      response.json(record.protocol === 'smb' ? await probeSmb(record) : await probeSftp(record));
+      if (record.protocol === 'smb') { response.json(await probeSmb(record)); return; }
+      let target: SftpProfile;
+      try { target = registry.asProfile(record); }
+      catch (error) { response.json({ ok: false, message: error instanceof Error ? error.message : '配置无效', paths: [] }); return; }
+      response.json(await probeSftp(target, record.paths.filter((item) => item !== ServerValue.DefaultRoot)));
     } catch (error) {
       next(error);
+    }
+  });
+  app.put(`${ApiPath.Servers}/:id/${ApiPath.ServerPaths}`, (request, response, next) => {
+    try {
+      const paths = Array.isArray(request.body?.paths) ? request.body.paths.filter((item: unknown): item is string => typeof item === 'string') : [];
+      response.json({ server: registry.setPaths(request.params.id, paths) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get(ApiPath.Home, async (request, response, next) => {
+    try {
+      const resolved = resolveListedProfile(profile, registry, String(request.query.profileId || ''));
+      response.json({ path: resolved.protocol === 'smb' ? ServerValue.DefaultRoot : await sftpHome(resolved) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.post(ApiPath.ExecStream, async (request, response, next) => {
+    const controller = new AbortController();
+    response.on('close', () => { if (!response.writableEnded) controller.abort(); });
+    let started = false;
+    try {
+      const profileId = typeof request.body?.profileId === 'string' ? request.body.profileId : '';
+      const remotePath = typeof request.body?.path === 'string' ? request.body.path : '';
+      const command = typeof request.body?.command === 'string' ? request.body.command : '';
+      const resolved = resolveListedProfile(profile, registry, profileId);
+      const write = (value: object) => {
+        if (!started) {
+          started = true;
+          response.status(200);
+          response.setHeader('Content-Type', ServerValue.NdjsonType);
+          response.setHeader('Cache-Control', 'no-cache');
+          response.setHeader('X-Accel-Buffering', 'no');
+          response.flushHeaders();
+        }
+        response.write(`${JSON.stringify(value)}${ServerValue.Newline}`);
+      };
+      const end = await streamSftpCommand(resolved, remotePath, command, (kind, text) => write({ type: kind, text }), controller.signal);
+      write({ type: 'end', ...end });
+      response.end();
+    } catch (error) {
+      if (!started) { next(error); return; }
+      if (!response.writableEnded) {
+        response.write(`${JSON.stringify({ type: 'fail', message: RemoteError.from(error, '执行远程命令').message })}${ServerValue.Newline}`);
+        response.end();
+      }
     }
   });
   app.delete(`${ApiPath.Servers}/:id`, (request, response, next) => {
@@ -81,15 +132,15 @@ export function registerSftpRoutes(
     try {
       const resolved = resolveListedProfile(profile, registry, String(request.query.profileId || ''));
       if (resolved.protocol === 'smb') throw new ServiceError(ApiErrorCode.InvalidRequest, 'SMB 不需要解析符号链接', 400);
-      const stat = await withSftpSession(resolved, (client) => client.stat(String(request.query.path || '/')));
-      response.json({ type: stat.isDirectory ? 'dir' : 'file' });
+      response.json(await statSftp(resolved, String(request.query.path || '/')));
     } catch (error) { next(error); }
   });
   app.post(ApiPath.Downloads, (request, response, next) => {
     try {
       const profileId = typeof request.body?.profileId === 'string' ? request.body.profileId : '';
       const remotePath = typeof request.body?.remotePath === 'string' ? request.body.remotePath : '';
-      response.status(202).json(service.create(profileId, remotePath));
+      const tailBytes = typeof request.body?.tailBytes === 'number' ? request.body.tailBytes : undefined;
+      response.status(202).json(service.create(profileId, remotePath, { tailBytes }));
     } catch (error) {
       next(error);
     }
@@ -143,6 +194,8 @@ function bodyAsInput(body: unknown): RemoteServerInput {
     port: typeof value.port === 'number' ? value.port : (value.port === undefined || value.port === '' ? undefined : Number(value.port)),
     user: typeof value.user === 'string' ? value.user : '',
     password: typeof value.password === 'string' ? value.password : '',
+    auth: value.auth === 'key' ? 'key' : 'password',
+    keyPath: typeof value.keyPath === 'string' ? value.keyPath : undefined,
     paths: Array.isArray(value.paths) ? value.paths.filter((item): item is string => typeof item === 'string') : [],
     domain: typeof value.domain === 'string' ? value.domain : undefined,
     share: typeof value.share === 'string' ? value.share : undefined,

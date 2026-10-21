@@ -44,7 +44,8 @@ export class HistoryStore {
   }
 
   async update(id: string, patch: Pick<HistoryLog, 'repository' | 'sourceAnchor'>): Promise<HistoryLog> {
-    const log = { ...await this.get(id), ...patch };
+    const kept = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+    const log = { ...await this.get(id), ...kept };
     await this.write(log);
     return log;
   }

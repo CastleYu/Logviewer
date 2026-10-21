@@ -41,6 +41,11 @@ async function run(): Promise<void> {
     const after = await reloaded.list();
     assert.deepEqual(after.map(({ id, created, name, origin, size, formatId, kind, repository }) => ({ id, created, name, origin, size, formatId, kind, repository })), beforeView);
     assert.equal((await reloaded.get(remoteA.id)).repository, path.join(root, 'repo'));
+    await store.update(remoteA.id, { repository: undefined } as never);
+    assert.equal((await store.get(remoteA.id)).repository, path.join(root, 'repo'));
+    const badRepo = await json(base, `${HistoryConst.Api}/${remoteA.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', [HistoryConst.Header]: HistoryConst.HeaderValue }, body: JSON.stringify({ repository: { evil: 1 } }) });
+    assert.equal(badRepo.status, 400);
+    assert.equal((await store.get(remoteA.id)).repository, path.join(root, 'repo'));
 
     const large = 'x'.repeat(40_000);
     const uploaded = await json(base, `${HistoryConst.Api}?name=large.log&origin=upload&kind=local&formatId=plain`, { method: 'POST', headers: { 'Content-Type': 'text/plain', [HistoryConst.Header]: HistoryConst.HeaderValue }, body: large });

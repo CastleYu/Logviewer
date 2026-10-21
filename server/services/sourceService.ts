@@ -141,7 +141,7 @@ export class SourceService {
       const real = await this.validateRoot(input, false);
       const roots = this.config.roots.filter((root) => root !== real);
       if (roots.length === this.config.roots.length) throw new SourceError('未找到该索引目录', 404);
-      this.dropRootFiles(real);
+      this.dropRootFiles(real, roots);
       await this.commit({ roots, openers: this.config.openers });
     });
   }
@@ -193,7 +193,7 @@ export class SourceService {
   private async replaceRootIndex(root: string): Promise<void> {
     const kept = this.fileCount() - this.rootFileCount(root);
     const scanned = await this.scanRoots([root], kept);
-    this.dropRootFiles(root);
+    this.dropRootFiles(root, this.config.roots.filter((item) => item !== root));
     this.mergeIndex(scanned);
   }
 
@@ -233,9 +233,9 @@ export class SourceService {
     }
   }
 
-  private dropRootFiles(root: string): void {
+  private dropRootFiles(root: string, rest: string[]): void {
     for (const [key, files] of [...this.index.entries()]) {
-      const next = files.filter((file) => !this.inside(root, file));
+      const next = files.filter((file) => !this.inside(root, file) || rest.some((item) => this.inside(item, file)));
       if (next.length) this.index.set(key, next);
       else this.index.delete(key);
     }

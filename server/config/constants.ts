@@ -17,6 +17,10 @@ export enum ApiErrorCode {
   TaskNotFound = 'TASK_NOT_FOUND',
   TaskNotReady = 'TASK_NOT_READY',
   DownloadFailed = 'DOWNLOAD_FAILED',
+  AuthFailed = 'AUTH_FAILED',
+  HostUnreachable = 'HOST_UNREACHABLE',
+  PermissionDenied = 'PERMISSION_DENIED',
+  Timeout = 'TIMEOUT',
 }
 
 export class ApiPath {
@@ -26,6 +30,9 @@ export class ApiPath {
   static readonly ServerProbe = '/api/sftp/servers/probe';
   static readonly List = '/api/sftp/list';
   static readonly Exec = '/api/sftp/exec';
+  static readonly ExecStream = '/api/sftp/exec/stream';
+  static readonly Home = '/api/sftp/home';
+  static readonly ServerPaths = 'paths';
   static readonly Stat = '/api/sftp/stat';
   static readonly Downloads = '/api/sftp/downloads';
   static readonly Health = '/api/health';
@@ -64,4 +71,9 @@ export class ServerValue {
   static readonly CacheDir = '.logviewer-cache';
   static readonly RegistryFile = '.logviewer-remotes.json';
   static readonly PartSuffix = '.part';
+  static readonly ExecOutputCap = 2 * 1024 * 1024;
+  static readonly LinkResolveLimit = 64;
+  static readonly GzipSuffix = '.gz';
+  static readonly Newline = String.fromCharCode(10);
+  static readonly NdjsonType = 'application/x-ndjson; charset=utf-8';
 }

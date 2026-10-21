@@ -9,6 +9,7 @@ export interface SftpProfile {
   user: string;
   password?: string;
   privateKey?: string;
+  passphrase?: string;
   root: string;
   roots?: string[];
   fingerprint?: string;
@@ -43,6 +44,10 @@ export interface DownloadTask {
   client?: SftpClient;
   abort?: () => void;
   cancelled: boolean;
+  tailBytes?: number;
+  remoteSize?: number;
+  skippedBytes?: number;
+  gzip?: boolean;
 }
 
 export interface DownloadTaskView {
@@ -52,4 +57,7 @@ export interface DownloadTaskView {
   downloadedBytes: number;
   totalBytes: number;
   error?: string;
+  remoteSize?: number;
+  skippedBytes?: number;
+  gzip?: boolean;
 }

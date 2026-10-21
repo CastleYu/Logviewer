@@ -14,7 +14,7 @@ export function patternMatches(pattern: string, file: string): boolean {
   for (const part of parts) {
     if (/^\.?\w+$/.test(part)) {
       const want = part.startsWith('.') ? part.toLowerCase() : `.${part.toLowerCase()}`;
-      if (ext === want) return true;
+      if (ext === want || base.toLowerCase() === part.toLowerCase()) return true;
       continue;
     }
     try {

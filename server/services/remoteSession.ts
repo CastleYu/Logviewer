@@ -17,10 +17,10 @@ function key(profile: SftpProfile): string {
 type SftpEntry = { client: SftpClient; ready: Promise<void>; tail: Promise<unknown>; last: number; users: number; active: number; timer?: ReturnType<typeof setTimeout> };
 const sftp = new Map<string, SftpEntry>();
 
-function sftpOptions(profile: SftpProfile): Parameters<SftpClient['connect']>[0] {
+export function sftpOptions(profile: SftpProfile): Parameters<SftpClient['connect']>[0] {
   return {
     host: profile.host, port: profile.port, username: profile.user,
-    password: profile.password, privateKey: profile.privateKey,
+    password: profile.password, privateKey: profile.privateKey, passphrase: profile.passphrase,
     readyTimeout: ServerValue.ReadyTimeoutMs, keepaliveInterval: ServerValue.KeepaliveMs,
     hostHash: profile.fingerprint ? 'sha256' : undefined,
     hostVerifier: profile.fingerprint ? (value: string) => value === profile.fingerprint : undefined,
@@ -103,7 +103,7 @@ async function getSsh(profile: SftpProfile): Promise<[string, SshEntry]> {
       const timer = setTimeout(() => reject(new Error('SSH connection timeout')), ServerValue.ConnectTimeoutMs);
       timer.unref?.();
       client.once('ready', () => { clearTimeout(timer); resolve(); });
-      client.once('error', (error) => { clearTimeout(timer); if (ssh.get(id) === entry) ssh.delete(id); reject(error); });
+      client.on('error', (error) => { clearTimeout(timer); if (ssh.get(id) === entry) ssh.delete(id); reject(error); });
       client.once('close', () => { if (ssh.get(id) === entry) ssh.delete(id); });
       client.connect(sftpOptions(profile) as never);
     });
@@ -122,6 +122,22 @@ export async function withSshSession<T>(profile: SftpProfile, fn: (client: Clien
     entry.active = Math.max(0, entry.active - 1);
     entry.users = Math.max(0, entry.users - 1);
     entry.last = Date.now();
+    entry.timer = setTimeout(() => { if (Date.now() - entry.last >= RemoteSessionValue.IdleMs && entry.users === 0 && entry.active === 0 && ssh.get(id) === entry) { ssh.delete(id); entry.client.end(); } }, RemoteSessionValue.IdleMs);
+    entry.timer.unref?.();
+  }
+}
+
+/** 不串行化：SSH 连接上可以并发多个 exec 通道，长命令（tail -f）不应阻塞后续命令。 */
+export async function withSshClient<T>(profile: SftpProfile, fn: (client: Client) => Promise<T>): Promise<T> {
+  const [id, entry] = await getSsh(profile);
+  entry.users += 1;
+  entry.active += 1;
+  try { await entry.ready; return await fn(entry.client); }
+  finally {
+    entry.active = Math.max(0, entry.active - 1);
+    entry.users = Math.max(0, entry.users - 1);
+    entry.last = Date.now();
+    if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => { if (Date.now() - entry.last >= RemoteSessionValue.IdleMs && entry.users === 0 && entry.active === 0 && ssh.get(id) === entry) { ssh.delete(id); entry.client.end(); } }, RemoteSessionValue.IdleMs);
     entry.timer.unref?.();
   }

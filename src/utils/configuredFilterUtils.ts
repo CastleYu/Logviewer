@@ -96,8 +96,8 @@ export function matchRuntimeFilter(value: unknown, filter: RuntimeFieldFilter, f
       return matchesMin && matchesMax;
     }
     case FieldFilterKind.DateTimeRange: {
-      const timezone = field?.type === FieldType.DateTime ? field.datetime?.timezone : undefined;
-      const time = typeof value === 'string' ? parseConfiguredDateTime(value, timezone) : Number(value);
+      const datetime = field?.type === FieldType.DateTime ? field.datetime : undefined;
+      const time = typeof value === 'string' ? parseConfiguredDateTime(value, datetime?.timezone, datetime?.formats) : Number(value);
       if (time === null || !Number.isFinite(time)) return false;
       const start = filter.start ? parseInputTimeToMs(filter.start, filter.offsetHours !== 0, filter.offsetHours) : null;
       const end = filter.end ? parseInputTimeToMs(filter.end, filter.offsetHours !== 0, filter.offsetHours, true) : null;

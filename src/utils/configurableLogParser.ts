@@ -176,7 +176,7 @@ export function coerceValue(value: unknown, field: LogFieldConfig): unknown {
       return String(value);
     case FieldType.DateTime: {
       const text = String(value);
-      return parseConfiguredDateTime(text, field.datetime?.timezone) === null ? undefined : text;
+      return parseConfiguredDateTime(text, field.datetime?.timezone, field.datetime?.formats) === null ? undefined : text;
     }
     case FieldType.Integer: {
       const parsed = Number.parseInt(String(value), 10);
@@ -274,13 +274,13 @@ export function parseConfiguredLogContent(fullContent: string, fileName: string,
         .some((parser) => { const fields = parseStage(item.raw, parser); return fields && finalizeFields(fields, format, item.raw); }) : false;
     return attachStack(parseConfiguredLogLine(whole ? item.raw : item.head, item.start - 1, format), item, format.record, isHead(item.head), format, whole);
   });
-  const levelCounts: Record<string, number> = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, OTHER: 0 };
+  const levelCounts: Record<string, number> = Object.assign(Object.create(null), { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, OTHER: 0 });
   let successCount = 0;
   for (const log of logs) {
     if (!log.success || !log.fields) continue;
     successCount++;
     const level = log.fields.level;
-    levelCounts[level] = levelCounts[level] === undefined ? 1 : levelCounts[level] + 1;
+    levelCounts[level] = (levelCounts[level] ?? 0) + 1;
   }
   return {
     logs,

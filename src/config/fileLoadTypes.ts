@@ -31,6 +31,7 @@ export interface FileLoadState {
   taskId?: string;
   message?: string;
   remoteKind?: 'sftp' | 'smb';
+  tailBytes?: number;
 }
 
 export interface SftpProfileView {
@@ -52,6 +53,8 @@ export interface RemoteServerRecord {
   port: number;
   user: string;
   password: string;
+  auth?: 'password' | 'key';
+  keyPath?: string;
   paths: string[];
   domain?: string;
   share?: string;
@@ -64,6 +67,8 @@ export interface RemoteServerDraft {
   port: number;
   user: string;
   password: string;
+  auth?: 'password' | 'key';
+  keyPath?: string;
   paths: string[];
   domain?: string;
   share?: string;
@@ -79,6 +84,8 @@ export interface ProbeResult {
   ok: boolean;
   message: string;
   paths: ProbePathResult[];
+  home?: string;
+  latencyMs?: number;
 }
 
 export interface DownloadTaskView {
@@ -88,6 +95,9 @@ export interface DownloadTaskView {
   downloadedBytes: number;
   totalBytes: number;
   error?: string;
+  remoteSize?: number;
+  skippedBytes?: number;
+  gzip?: boolean;
 }
 
 export class LoadState {
@@ -105,6 +115,7 @@ export interface RemoteDirEntry {
   type: 'file' | 'dir' | 'link';
   size: number;
   modifyTime?: number;
+  target?: 'file' | 'dir';
 }
 
 export interface RemoteDirList {
@@ -120,6 +131,12 @@ export class RemoteApiPath {
   static readonly Exec = '/api/sftp/exec';
   static readonly Stat = '/api/sftp/stat';
   static readonly Downloads = '/api/sftp/downloads';
+  static readonly ExecStream = '/api/sftp/exec/stream';
+  static readonly Home = '/api/sftp/home';
+
+  static paths(id: string): string {
+    return `${this.server(id)}/paths`;
+  }
 
   static task(id: string): string {
     return `${this.Downloads}/${encodeURIComponent(id)}`;
@@ -144,4 +161,58 @@ export interface RemoteExecResult {
   code: number | null;
   text: string;
   cwd: string | null;
+}
+
+export interface RemoteStatResult {
+  type: 'dir' | 'file';
+  size: number;
+  modifyTime?: number;
+}
+
+export enum ExecEventKind {
+  Out = 'out',
+  Err = 'err',
+  End = 'end',
+  Fail = 'fail',
+}
+
+export type ExecEvent =
+  | { type: ExecEventKind.Out | ExecEventKind.Err; text: string }
+  | { type: ExecEventKind.End; code: number | null; cwd: string | null; truncated: boolean }
+  | { type: ExecEventKind.Fail; message: string };
+
+export interface RemoteOpenOptions {
+  tailBytes?: number;
+  save?: boolean;
+}
+
+export enum RemoteProtocolKind {
+  Sftp = 'sftp',
+  Smb = 'smb',
+}
+
+export enum RemoteSortKey {
+  Name = 'name',
+  Size = 'size',
+  Time = 'time',
+}
+
+export class RemoteUi {
+  static readonly MB = 1024 * 1024;
+  /** 超过该体积时先确认打开方式，默认只看末尾。 */
+  static readonly LargeFileBytes = 32 * 1024 * 1024;
+  static readonly DefaultTailBytes = 8 * 1024 * 1024;
+  static readonly TailChoices = [1, 8, 32, 128];
+  static readonly RenderCap = 500;
+  static readonly RecentLimit = 10;
+  static readonly HistoryLimit = 50;
+  static readonly ConsoleBlocks = 40;
+  static readonly BinaryProbeBytes = 65536;
+  static readonly EnvProfileId = 'default';
+}
+
+export class RemoteStoreKey {
+  static readonly Prefs = 'LOGVIEWER_REMOTE_PREFS';
+  static readonly Window = 'LOGVIEWER_REMOTE_WINDOW';
+  static readonly History = 'LOGVIEWER_REMOTE_CMD_HISTORY';
 }

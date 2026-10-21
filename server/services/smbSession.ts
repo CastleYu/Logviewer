@@ -3,6 +3,7 @@ import { ApiErrorCode, ServerValue } from '../config/constants';
 import type { SftpProfile } from '../models/sftpModels';
 import { ServiceError } from './serviceError';
 import crypto from 'node:crypto';
+import { RemoteError } from './remoteError';
 
 export class SmbSessionValue {
   static readonly IdleMs = 30_000;
@@ -35,9 +36,9 @@ export async function withSmbTree<T>(profile: SftpProfile, fn: (tree: Awaited<Re
       const tree = await session.connectTree(share);
       entry = { client, session, tree, tail: Promise.resolve(), last: Date.now(), users: 0, active: 0 };
       sessions.set(id, entry);
-    } catch {
+    } catch (error) {
       await client.close().catch(() => undefined);
-      throw new ServiceError(ApiErrorCode.DownloadFailed, '无法连接到 SMB 服务器，请检查主机、共享名、用户名和密码', 502);
+      throw RemoteError.from(error, '连接 SMB 共享', share);
     }
   }
   entry.last = Date.now();
@@ -47,14 +48,15 @@ export async function withSmbTree<T>(profile: SftpProfile, fn: (tree: Awaited<Re
   entry.tail = run.then(() => undefined, () => undefined);
   try { return await run; }
   catch (error) {
-    if (sessions.get(id) === entry) {
+    const mapped = RemoteError.from(error, '访问 SMB 共享', share);
+    const benign = [ApiErrorCode.FileNotFound, ApiErrorCode.PermissionDenied, ApiErrorCode.NotAFile, ApiErrorCode.InvalidRequest, ApiErrorCode.FileTooLarge];
+    if (!benign.includes(mapped.code) && sessions.get(id) === entry) {
       sessions.delete(id);
       await entry.tree.disconnect().catch(() => undefined);
       await entry.session.logoff().catch(() => undefined);
       await entry.client.close().catch(() => undefined);
     }
-    if (error instanceof ServiceError) throw error;
-    throw new ServiceError(ApiErrorCode.DownloadFailed, '无法访问 SMB 共享，请检查共享名、用户名、密码和路径', 502);
+    throw mapped;
   }
   finally {
     entry.active = Math.max(0, entry.active - 1);

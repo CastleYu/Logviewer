@@ -1,4 +1,5 @@
 export type RemoteProtocol = 'sftp' | 'smb';
+export type RemoteAuth = 'password' | 'key';
 
 export interface RemoteServerRecord {
   id: string;
@@ -8,6 +9,8 @@ export interface RemoteServerRecord {
   port: number;
   user: string;
   password: string;
+  auth?: RemoteAuth;
+  keyPath?: string;
   paths: string[];
   domain?: string;
   share?: string;
@@ -27,6 +30,8 @@ export interface RemoteServerInput {
   port?: number;
   user: string;
   password: string;
+  auth?: RemoteAuth;
+  keyPath?: string;
   paths: string[];
   domain?: string;
   share?: string;

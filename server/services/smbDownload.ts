@@ -4,6 +4,10 @@ import { ApiErrorCode, DownloadStatus } from '../config/constants';
 import type { DownloadTask, SftpProfile } from '../models/sftpModels';
 import { ServiceError } from './serviceError';
 import { smbRelPath, withSmbTree } from './smbSession';
+import zlib from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
+import { capBytes, tooLarge } from './downloadStreams';
+import { RemoteError } from './remoteError';
 
 export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile): Promise<void> {
   try {
@@ -19,12 +23,15 @@ export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile):
       if (!entry) throw new ServiceError(ApiErrorCode.FileNotFound, '远程文件不存在', 404);
       if (entry.type === 'Directory') throw new ServiceError(ApiErrorCode.NotAFile, '指定路径不是普通文件', 400);
       const size = Number(entry.fileSize) || 0;
+      task.remoteSize = size;
+      if (size > profile.maxBytes) throw tooLarge(size, profile.maxBytes);
       task.totalBytes = size;
+      const target = task.gzip ? `${task.partPath}.gz` : task.partPath;
       if (task.cancelled) return;
       task.status = DownloadStatus.Downloading;
       const source = await tree.createFileReadStream(remote);
       await new Promise<void>((resolve, reject) => {
-        const output = fs.createWriteStream(task.partPath);
+        const output = fs.createWriteStream(target);
         task.abort = () => { source.destroy?.(); output.destroy(); reject(new Error('download cancelled')); };
         source.on('data', (chunk: Buffer) => {
           task.downloadedBytes += chunk.length;
@@ -38,22 +45,28 @@ export async function downloadSmbFile(task: DownloadTask, profile: SftpProfile):
         source.pipe(output);
       });
       if (task.cancelled) return;
-      const local = fs.statSync(task.partPath);
+      const local = fs.statSync(target);
       if (local.size !== task.totalBytes) throw new Error('下载文件大小与远程文件不一致');
+      if (task.gzip) {
+        await pipeline(fs.createReadStream(target), zlib.createGunzip(), capBytes(profile.maxBytes), fs.createWriteStream(task.partPath));
+        fs.rmSync(target, { force: true });
+      }
       fs.renameSync(task.partPath, task.localPath);
-      task.downloadedBytes = local.size;
-      task.totalBytes = local.size;
+      const final = fs.statSync(task.localPath);
+      task.downloadedBytes = final.size;
+      task.totalBytes = final.size;
       task.status = DownloadStatus.Completed;
     });
   } catch (error) {
     try {
       fs.rmSync(task.partPath, { force: true });
+      fs.rmSync(`${task.partPath}.gz`, { force: true });
     } catch {
       // Cache cleanup is best-effort.
     }
     if (!task.cancelled) {
       task.status = DownloadStatus.Failed;
-      task.error = error instanceof ServiceError ? error.message : 'SMB 下载失败，请检查连接、权限和远程路径';
+      task.error = (error as { code?: string })?.code === 'Z_DATA_ERROR' ? '不是有效的 gzip 文件' : RemoteError.from(error, '下载文件', task.remotePath).message;
     }
   } finally { task.abort = undefined; }
 }

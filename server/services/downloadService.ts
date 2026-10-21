@@ -2,11 +2,20 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import SftpClient from 'ssh2-sftp-client';
+import zlib from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 import { ApiErrorCode, DownloadStatus, ServerValue } from '../config/constants';
 import type { DownloadTask, DownloadTaskView, SftpProfile } from '../models/sftpModels';
 import { RemotePath } from './remotePath';
 import { ServiceError } from './serviceError';
 import { downloadSmbFile } from './smbDownload';
+import { RemoteError } from './remoteError';
+import { capBytes, skipFirstLine, tooLarge } from './downloadStreams';
+import { sftpOptions } from './remoteSession';
+
+export interface DownloadOptions {
+  tailBytes?: number;
+}
 
 export { ServiceError };
 
@@ -23,7 +32,7 @@ export class DownloadService {
     fs.mkdirSync(this.cacheDir, { recursive: true });
   }
 
-  create(profileId: string, remotePath: string): DownloadTaskView {
+  create(profileId: string, remotePath: string, options: DownloadOptions = {}): DownloadTaskView {
     const profile = this.requireProfile(profileId);
     const safePath = this.remotePath(remotePath, RemotePath.rootsOf(profile.root, profile.roots));
     const id = crypto.randomUUID();
@@ -40,6 +49,8 @@ export class DownloadService {
       downloadedBytes: 0,
       totalBytes: 0,
       cancelled: false,
+      tailBytes: options.tailBytes && options.tailBytes > 0 ? Math.floor(options.tailBytes) : undefined,
+      gzip: fileName.toLowerCase().endsWith(ServerValue.GzipSuffix),
     };
     this.tasks.set(id, task);
     void (profile.protocol === 'smb' ? downloadSmbFile(task, profile) : this.run(task, profile));
@@ -82,42 +93,58 @@ export class DownloadService {
     const client = new SftpClient(`logviewer-download-${task.id}`);
     task.client = client;
     try {
-      await client.connect({
-        host: profile.host, port: profile.port, username: profile.user,
-        password: profile.password, privateKey: profile.privateKey,
-        readyTimeout: ServerValue.ReadyTimeoutMs, keepaliveInterval: ServerValue.KeepaliveMs,
-        hostHash: profile.fingerprint ? 'sha256' : undefined,
-        hostVerifier: profile.fingerprint ? (value) => value === profile.fingerprint : undefined,
-      });
+      await client.connect(sftpOptions(profile));
       if (task.cancelled) return;
       const exists = await client.exists(task.remotePath);
-      if (!exists) throw new ServiceError(ApiErrorCode.FileNotFound, '远程文件不存在', 404);
-      if (exists !== '-' && exists !== 'l') throw new ServiceError(ApiErrorCode.NotAFile, '指定路径不是普通文件', 400);
-      const resolvedPath = await client.realPath(task.remotePath);
-      this.remotePath(resolvedPath, RemotePath.rootsOf(profile.root, profile.roots));
+      if (!exists) throw new ServiceError(ApiErrorCode.FileNotFound, `远程文件不存在：${task.remotePath}`, 404);
+      if (exists === 'd') throw new ServiceError(ApiErrorCode.NotAFile, '这是一个目录，不能作为日志打开', 400);
       const stat = await client.stat(task.remotePath);
-      task.totalBytes = stat.size;
+      if (stat.isDirectory) throw new ServiceError(ApiErrorCode.NotAFile, '这是一个目录，不能作为日志打开', 400);
+      const size = Number(stat.size) || 0;
+      task.remoteSize = size;
+      const tail = !task.gzip && task.tailBytes && size > task.tailBytes ? task.tailBytes : 0;
+      if (!tail && size > profile.maxBytes) throw tooLarge(size, profile.maxBytes);
       task.status = DownloadStatus.Downloading;
-      await client.fastGet(task.remotePath, task.partPath, {
-        step: (transferred, _chunk, total) => {
-          if (task.cancelled) return;
-          task.downloadedBytes = transferred;
-          task.totalBytes = total;
-        },
-      });
+      const target = task.gzip ? `${task.partPath}.gz` : task.partPath;
+      if (tail) {
+        const start = size - tail;
+        task.skippedBytes = start;
+        task.totalBytes = tail;
+        const source = client.createReadStream(task.remotePath, { start });
+        task.abort = () => source.destroy();
+        source.on('data', (chunk: Buffer) => { task.downloadedBytes += chunk.length; });
+        await pipeline(source, skipFirstLine(), fs.createWriteStream(target));
+      } else {
+        task.totalBytes = size;
+        await client.fastGet(task.remotePath, target, {
+          step: (transferred, _chunk, total) => {
+            if (task.cancelled) return;
+            task.downloadedBytes = transferred;
+            task.totalBytes = total;
+          },
+        });
+        if (fs.statSync(target).size !== size) throw new Error('下载文件大小与远程文件不一致');
+      }
       if (task.cancelled) return;
-      const local = fs.statSync(task.partPath);
-      if (local.size !== task.totalBytes) throw new Error('下载文件大小与远程文件不一致');
+      if (task.gzip) {
+        await pipeline(fs.createReadStream(target), zlib.createGunzip(), capBytes(profile.maxBytes), fs.createWriteStream(task.partPath));
+        this.remove(target);
+      }
       fs.renameSync(task.partPath, task.localPath);
+      task.totalBytes = fs.statSync(task.localPath).size;
       task.downloadedBytes = task.totalBytes;
       task.status = DownloadStatus.Completed;
     } catch (error) {
       this.remove(task.partPath);
+      this.remove(`${task.partPath}.gz`);
       if (!task.cancelled) {
         task.status = DownloadStatus.Failed;
-        task.error = error instanceof ServiceError ? error.message : 'SFTP 下载失败，请检查连接、权限和远程路径';
+        task.error = (error as { code?: string })?.code === 'Z_DATA_ERROR'
+          ? '不是有效的 gzip 文件'
+          : RemoteError.from(error, '下载文件', task.remotePath).message;
       }
     } finally {
+      task.abort = undefined;
       await client.end().catch(() => false);
       task.client = undefined;
     }
@@ -148,6 +175,9 @@ export class DownloadService {
       downloadedBytes: task.downloadedBytes,
       totalBytes: task.totalBytes,
       error: task.error,
+      remoteSize: task.remoteSize,
+      skippedBytes: task.skippedBytes,
+      gzip: task.gzip,
     };
   }
 

@@ -9,6 +9,7 @@ import { createConfiguredFilters, matchConfiguredFilters } from '../src/utils/co
 import { validateLogViewerConfig } from '../src/utils/logConfigLoader';
 import { buildCopyText, copyActions } from '../src/utils/logCopyUtils';
 import { parseLogContent } from '../src/utils/logParser';
+import { parseConfiguredDateTime, parseLogTimestampToMs } from '../src/utils/dateUtils';
 
 function loadConfig(): unknown {
   return JSON.parse(readFileSync(resolve('public/logviewer.config.json'), 'utf8')) as unknown;
@@ -99,7 +100,25 @@ function verifyInvalidContract(): void {
   assert.ok(copyResult.errors.some((error) => error.code === ConfigErrorCode.CopyFieldUnknown));
 }
 
+function verifyDates(): void {
+  assert.equal(parseLogTimestampToMs('2024-01-01T10:00:00+0800'), Date.UTC(2024, 0, 1, 2));
+  assert.equal(parseLogTimestampToMs('2024-01-01T10:00:00+08:00'), Date.UTC(2024, 0, 1, 2));
+  assert.equal(parseLogTimestampToMs('2024-01-01 10:00:00.123456'), Date.UTC(2024, 0, 1, 10, 0, 0, 123));
+  assert.equal(parseConfiguredDateTime('2024-07-15 12:00:00', 'local'), new Date(2024, 6, 15, 12).getTime());
+  assert.equal(parseConfiguredDateTime('2024-01-15 12:00:00', 'local'), new Date(2024, 0, 15, 12).getTime());
+  const formats = ['dd/MM/yyyy HH:mm:ss'];
+  assert.equal(parseConfiguredDateTime('15/01/2024 10:00:00', 'utc', formats), Date.UTC(2024, 0, 15, 10));
+  assert.equal(parseConfiguredDateTime('31/02/2024 10:00:00', 'utc', formats), null);
+  const format = createBuiltinLogFormat();
+  const ts = format.fields.find((field) => field.type === FieldType.DateTime);
+  if (ts) ts.datetime = { formats, timezone: 'preserve' };
+  const result = parseConfiguredLogContent("[15/01/2024 10:00:00][constructor][r][m][f][1][0x1][m][a.py][3]", "a", 1, format);
+  assert.equal(Object.getPrototypeOf(result.stats.levelCounts), null);
+  assert.equal(result.stats.successCount, 1);
+}
+
 function main(): void {
+  verifyDates();
   verifyConfig();
   verifyLegacyParity();
   verifyJsonAndFilters();

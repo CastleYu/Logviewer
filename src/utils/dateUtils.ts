@@ -6,7 +6,7 @@
 
 function parseParts(value: string, endOfDay: boolean): number[] | null {
   const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,3}))?)?)?$/,
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?)?$/,
   );
   if (!match) return null;
 
@@ -18,7 +18,7 @@ function parseParts(value: string, endOfDay: boolean): number[] | null {
   const minute = hasTime ? Number(match[5]) : endOfDay ? 59 : 0;
   const second = match[6] !== undefined ? Number(match[6]) : endOfDay ? 59 : 0;
   const millisecond = match[7] !== undefined
-    ? Number(match[7].padEnd(3, '0'))
+    ? Number(match[7].padEnd(3, '0').slice(0, 3))
     : endOfDay ? 999 : 0;
 
   if (
@@ -39,6 +39,14 @@ function parseParts(value: string, endOfDay: boolean): number[] | null {
   return [year, month, day, hour, minute, second, millisecond];
 }
 
+function localMs(parts: number[]): number {
+  const [year, month, day, hour, minute, second, millisecond] = parts;
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(hour, minute, second, millisecond);
+  return date.getTime();
+}
+
 function partsToUtc(parts: number[], offsetHours: number): number {
   const [year, month, day, hour, minute, second, millisecond] = parts;
   const date = new Date(0);
@@ -52,7 +60,7 @@ export function parseLogTimestampToMs(tsStr: string): number | null {
   if (!tsStr?.trim()) return null;
 
   const normalized = tsStr.trim().replace(',', '.');
-  const zoneMatch = normalized.match(/(Z|([+-])(\d{2}):(\d{2}))$/);
+  const zoneMatch = normalized.match(/(Z|([+-])(\d{2}):?(\d{2}))$/);
   const body = zoneMatch ? normalized.slice(0, -zoneMatch[1].length) : normalized;
   const parts = parseParts(body.trim(), false);
   if (!parts) return null;
@@ -69,13 +77,69 @@ export function parseLogTimestampToMs(tsStr: string): number | null {
   return partsToUtc(parts, offsetHours);
 }
 
-/** 按配置声明解释日志时间；带显式时区的值始终优先使用自身时区。 */
-export function parseConfiguredDateTime(tsStr: string, timezone: 'preserve' | 'utc' | 'local' = 'preserve'): number | null {
+const FormatToken = /yyyy|yy|MM|dd|HH|mm|ss|S+|[^yMdHmsS]+/g;
+const FormatDigits: Record<string, string> = { yyyy: '(\\d{4})', S: '(\\d{1,9})' };
+
+/** 将 yyyy/MM/dd/HH/mm/ss/S 格式串转为正则与分量索引；其余字符按字面匹配。 */
+function compileFormat(format: string): { regex: RegExp; order: string[] } | null {
+  const order: string[] = [];
+  let source = '';
+  for (const token of format.match(FormatToken) || []) {
+    if (/^[yMdHmsS]/.test(token)) {
+      const kind = token[0];
+      order.push(kind);
+      source += FormatDigits[token] ?? FormatDigits[kind] ?? '(\\d{2})';
+    } else source += token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return order.length ? { regex: new RegExp(`^${source}$`), order } : null;
+}
+
+/** 按 formats 解析时间文本，得到 parseParts 同构的分量；不匹配返回 null。 */
+function parseByFormats(text: string, formats: string[]): number[] | null {
+  for (const format of formats) {
+    const compiled = compileFormat(format);
+    const match = compiled?.regex.exec(text);
+    if (!compiled || !match) continue;
+    const parts = [1970, 1, 1, 0, 0, 0, 0];
+    compiled.order.forEach((kind, index) => {
+      const raw = match[index + 1];
+      if (kind === 'y') parts[0] = raw.length === 2 ? 2000 + Number(raw) : Number(raw);
+      else if (kind === 'M') parts[1] = Number(raw);
+      else if (kind === 'd') parts[2] = Number(raw);
+      else if (kind === 'H') parts[3] = Number(raw);
+      else if (kind === 'm') parts[4] = Number(raw);
+      else if (kind === 's') parts[5] = Number(raw);
+      else parts[6] = Number(raw.padEnd(3, '0').slice(0, 3));
+    });
+    const [y, mo, d, h, mi, s, ms] = parts;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) continue;
+    const check = new Date(0);
+    check.setUTCFullYear(y, mo - 1, d);
+    if (check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) continue;
+    return [y, mo, d, h, mi, s, ms];
+  }
+  return null;
+}
+
+/** 按配置声明解释日志时间；带显式时区的值始终优先使用自身时区；ISO 样式失败后按 formats 解析。 */
+export function parseConfiguredDateTime(
+  tsStr: string,
+  timezone: 'preserve' | 'utc' | 'local' = 'preserve',
+  formats: string[] = [],
+): number | null {
   if (!tsStr?.trim()) return null;
   const normalized = tsStr.trim().replace(',', '.');
-  if (/(Z|[+-]\d{2}:\d{2})$/.test(normalized) || timezone !== 'local') return parseLogTimestampToMs(normalized);
-  const localOffset = -new Date().getTimezoneOffset() / 60;
-  return parseInputTimeToMs(normalized, true, localOffset);
+  const explicit = /(Z|[+-]\d{2}:?\d{2})$/.test(normalized);
+  let iso: number | null;
+  if (explicit || timezone !== 'local') iso = parseLogTimestampToMs(normalized);
+  else {
+    const parts = parseParts(normalized, false);
+    iso = parts ? localMs(parts) : null;
+  }
+  if (iso !== null) return iso;
+  const parts = parseByFormats(tsStr.trim(), formats);
+  if (!parts) return null;
+  return timezone === 'local' ? localMs(parts) : partsToUtc(parts, 0);
 }
 
 /**

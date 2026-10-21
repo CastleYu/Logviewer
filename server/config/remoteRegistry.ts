@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ApiErrorCode, ServerValue } from './constants';
 import type { PublicSftpProfile, SftpProfile } from '../models/sftpModels';
-import type { RemoteProtocol, RemoteRegistryFile, RemoteServerInput, RemoteServerRecord } from '../models/remoteModels';
+import type { RemoteAuth, RemoteProtocol, RemoteRegistryFile, RemoteServerInput, RemoteServerRecord } from '../models/remoteModels';
 import { RemotePath } from '../services/remotePath';
 import { ServiceError } from '../services/serviceError';
 
@@ -64,6 +64,14 @@ export class RemoteRegistry {
     return { ...record, paths: [...record.paths] };
   }
 
+  setPaths(id: string, paths: string[]): RemoteServerRecord {
+    const index = this.servers.findIndex((server) => server.id === id);
+    if (index === -1) throw new ServiceError(ApiErrorCode.ServerNotFound, '未找到该注册服务器', 404);
+    this.servers[index] = { ...this.servers[index], paths: this.paths(paths) };
+    this.persist();
+    return { ...this.servers[index], paths: [...this.servers[index].paths] };
+  }
+
   delete(id: string): void {
     if (id === ServerValue.ProfileId) {
       throw new ServiceError(ApiErrorCode.InvalidRequest, '环境变量中的默认服务器不可删除', 400);
@@ -76,14 +84,16 @@ export class RemoteRegistry {
     this.persist();
   }
 
-  private asProfile(record: RemoteServerRecord): SftpProfile {
+  asProfile(record: RemoteServerRecord): SftpProfile {
     return {
       id: record.id,
       name: record.name,
       host: record.host,
       port: record.port,
       user: record.user,
-      password: record.password,
+      password: record.auth === 'key' ? undefined : record.password,
+      privateKey: record.auth === 'key' ? this.key(record.keyPath) : undefined,
+      passphrase: record.auth === 'key' && record.password ? record.password : undefined,
       root: record.paths[0] || ServerValue.DefaultRoot,
       roots: [...record.paths],
       fingerprint: record.fingerprint,
@@ -100,6 +110,9 @@ export class RemoteRegistry {
     const user = this.text(input.user, '用户名');
     const password = typeof input.password === 'string' ? input.password : '';
     const protocol = this.protocol(input.protocol);
+    const auth: RemoteAuth = protocol === 'sftp' && input.auth === 'key' ? 'key' : 'password';
+    const keyPath = auth === 'key' && typeof input.keyPath === 'string' && input.keyPath.trim() ? input.keyPath.trim() : undefined;
+    if (auth === 'key' && !keyPath) throw new ServiceError(ApiErrorCode.InvalidRequest, '请填写私钥文件路径', 400);
     const port = this.port(input.port, protocol);
     const paths = this.paths(input.paths);
     const share = typeof input.share === 'string' ? input.share.trim() : '';
@@ -115,12 +128,23 @@ export class RemoteRegistry {
       port,
       user,
       password,
+      auth,
+      keyPath,
       paths,
       domain: domain || undefined,
       share: share || undefined,
       fingerprint: typeof input.fingerprint === 'string' && input.fingerprint.trim() ? input.fingerprint.trim() : undefined,
       maxBytes: typeof input.maxBytes === 'number' && input.maxBytes > 0 ? input.maxBytes : undefined,
     };
+  }
+
+  private key(keyPath?: string): string {
+    if (!keyPath) throw new ServiceError(ApiErrorCode.InvalidRequest, '请填写私钥文件路径', 400);
+    try {
+      return fs.readFileSync(keyPath, 'utf8');
+    } catch {
+      throw new ServiceError(ApiErrorCode.AuthFailed, `无法读取私钥文件：${keyPath}`, 400);
+    }
   }
 
   private protocol(value: unknown): RemoteProtocol {

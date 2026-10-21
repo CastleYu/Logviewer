@@ -5,6 +5,7 @@ import type { RemoteDirList } from './sftpList';
 import { RemotePath } from './remotePath';
 import { ServiceError } from './serviceError';
 import { smbRelPath, withSmbTree } from './smbSession';
+import { RemoteError } from './remoteError';
 
 export async function listSmbDir(profile: SftpProfile, requestedPath: string): Promise<RemoteDirList> {
   const roots = RemotePath.rootsOf(profile.root, profile.roots);
@@ -15,8 +16,8 @@ export async function listSmbDir(profile: SftpProfile, requestedPath: string): P
     let items;
     try {
       items = await tree.readDirectory(smbRelPath(target));
-    } catch {
-      throw new ServiceError(ApiErrorCode.NotAFile, '指定路径不是目录', 400);
+    } catch (error) {
+      throw RemoteError.from(error, '读取目录', target);
     }
     const entries = items
       .filter((item) => item.filename && item.filename !== '.' && item.filename !== '..')

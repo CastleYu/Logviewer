@@ -113,6 +113,19 @@ async function verify(): Promise<void> {
     assert.equal(service.lookup('later.py').length, 1);
     await service.removeRoot(extra);
     assert.equal(service.lookup('extra.py').length, 0);
+    const outer = path.join(root, 'outer');
+    const inner = path.join(outer, 'inner');
+    await fs.mkdir(inner, { recursive: true });
+    await fs.writeFile(path.join(inner, 'nested.py'), 'n');
+    await service.addRoot(inner);
+    await service.addRoot(outer);
+    await service.removeRoot(outer);
+    assert.equal(service.lookup('nested.py').length, 1);
+    await service.removeRoot(inner);
+    assert.equal(patternMatches('Makefile', '/a/Makefile'), true);
+    assert.equal(patternMatches('.bashrc', '/a/.bashrc'), true);
+    assert.equal(patternMatches('Dockerfile', '/a/dockerfile'), true);
+    assert.equal(patternMatches('Makefile', '/a/other.mk'), false);
 
     const detectedExe = path.join(root, SourceConst.Exe[SourceIde.PyCharm]);
     const detectStore = path.join(root, 'detect.json');

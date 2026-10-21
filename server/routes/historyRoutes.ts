@@ -23,7 +23,13 @@ export function registerHistoryRoutes(app: Express, store: HistoryStore): void {
   router.post(HistoryConst.Pick, async (_req, res, next) => { try { res.json({ path: await pickPath('file', '*.*') }); } catch (e) { next(e); } });
   router.get('/:id/content', async (req, res, next) => { try { await store.get(req.params.id); res.type('text/plain').sendFile(store.contentPath(req.params.id)); } catch (e) { next(e); } });
   router.get('/:id', async (req, res, next) => { try { res.json(await store.get(req.params.id)); } catch (e) { next(e); } });
-  router.patch('/:id', async (req, res, next) => { try { res.json(await store.update(req.params.id, { repository: req.body.repository })); } catch (e) { next(e); } });
+  router.patch('/:id', async (req, res, next) => {
+    try {
+      const repository = req.body?.repository;
+      if (typeof repository !== 'string') { res.status(400).json({ message: '源码目录必须是字符串' }); return; }
+      res.json(await store.update(req.params.id, { repository }));
+    } catch (e) { next(e); }
+  });
   router.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(400).json({ message: error.message }); });
   app.use(HistoryConst.Api, router);
 }
