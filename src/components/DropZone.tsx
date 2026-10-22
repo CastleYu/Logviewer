@@ -1,178 +1,139 @@
-import React, { useState } from 'react';
-import { Upload, FileText, Sparkles, Code, Server, FolderOpen } from 'lucide-react';
-import { ThemeMode } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronRight, FileText, FlaskConical, FolderOpen, HardDrive, History, Server, Upload } from 'lucide-react';
+import { HistoryApi } from '../services/historyApi';
+import { HistoryKind, type HistoryLog } from '../config/historyTypes';
+import { SftpProfileView } from '../config/fileLoadTypes';
+import { formatFileSize } from '../utils/logParser';
 
 interface DropZoneProps {
-  onFileSelected: (file: File) => void;
-  onSelectRemote: () => void;
-  onOpenBrowse?: () => void;
-  onLoadSample: (count: number) => void;
   isLoading: boolean;
-  theme?: ThemeMode;
+  servers: SftpProfileView[];
+  onFileSelected: (file: File) => void;
+  onOpenLocal: () => void;
+  onOpenRemote: (profileId?: string) => void;
+  onLoadSample: (count: number) => void;
+  onOpenHistory: (log: HistoryLog) => void;
+  onShowHistory?: () => void;
 }
 
-export const DropZone: React.FC<DropZoneProps> = ({
-  onFileSelected,
-  onSelectRemote,
-  onOpenBrowse,
-  onLoadSample,
-  isLoading,
-  theme = 'dark',
-}) => {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const isLight = theme === 'light';
+const recentLimit = 6;
 
-  const handleFile = (file: File) => {
-    if (!file || isLoading) return;
-    onFileSelected(file);
+function when(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  return date.toLocaleDateString();
+}
+
+/** 首页：拖入或选择文件为主操作；右侧给出最近日志与远程服务器，回访时一步直达。 */
+export const DropZone: React.FC<DropZoneProps> = ({ isLoading, servers, onFileSelected, onOpenLocal, onOpenRemote, onLoadSample, onOpenHistory }) => {
+  const [over, setOver] = useState(false);
+  const [recent, setRecent] = useState<HistoryLog[] | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const ready = servers.filter((item) => item.ready);
+
+  useEffect(() => {
+    let active = true;
+    HistoryApi.list()
+      .then((list) => { if (active) setRecent([...list].sort((a, b) => b.created.localeCompare(a.created)).slice(0, recentLimit)); })
+      .catch(() => { if (active) setRecent([]); });
+    return () => { active = false; };
+  }, []);
+
+  const drop = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOver(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file && !isLoading) onFileSelected(file);
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (isLoading) return;
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  };
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFile(e.target.files[0]);
-    }
-  };
+  const kindIcon = (kind: HistoryKind) => (kind === HistoryKind.Remote ? <HardDrive className="h-3.5 w-3.5" /> : kind === HistoryKind.Sample ? <FlaskConical className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />);
 
   return (
-    <div
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      className={`flex-1 w-full h-full flex flex-col items-center justify-center p-6 transition-all relative overflow-hidden select-none ${
-        isDragOver
-          ? isLight ? 'bg-indigo-50/80 border-2 border-dashed border-indigo-500' : 'bg-indigo-950/30 border-2 border-dashed border-indigo-400'
-          : isLight ? 'bg-slate-50 text-slate-800' : 'bg-slate-950 text-slate-100'
-      }`}
-    >
-      {/* 初始全屏拖拽大虚线框 */}
-      <div className={`w-full max-w-3xl border border-dashed rounded-2xl p-8 sm:p-12 flex flex-col items-center text-center transition-all ${
-        isDragOver
-          ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 shadow-2xl scale-[1.01]'
-          : isLight
-            ? 'border-slate-300 bg-white shadow-xl hover:border-slate-400'
-            : 'border-slate-800/90 bg-slate-900/40 hover:border-slate-700/80 hover:bg-slate-900/60 shadow-2xl'
-      }`}>
-        {/* 顶部图标 */}
-        <div className={`w-16 h-16 rounded-2xl border flex items-center justify-center mb-6 shadow-xs group transition-all ${
-          isLight 
-            ? 'bg-indigo-50 border-indigo-200/80 text-indigo-600' 
-            : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.15)]'
-        }`}>
-          <Upload className={`w-7 h-7 transition-transform duration-300 ${isDragOver ? 'scale-125 -translate-y-1' : ''}`} />
-        </div>
-
-        {/* 标题说明 */}
-        <h2 className={`text-xl sm:text-2xl font-bold tracking-tight ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
-          请将日志文件拖拽至此
-        </h2>
-        <p className={`text-xs sm:text-sm mt-2 max-w-md leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-          支持 <code className={isLight ? 'text-indigo-700 font-mono font-semibold' : 'text-indigo-300 font-mono'}>.log</code>, <code className={isLight ? 'text-indigo-700 font-mono font-semibold' : 'text-indigo-300 font-mono'}>.txt</code> 等任意文本格式日志文件。系统将自动执行基于括号计数的嵌套算法进行极速拆解。
-        </p>
-
-        {/* 文件选择按钮 */}
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <label className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold text-xs rounded-lg transition-all shadow-md shadow-indigo-600/20 cursor-pointer active:scale-95">
-            <FileText className="w-4 h-4" />
-            选择本地文件
-            <input
-              type="file"
-              accept=".log,.txt,.out,.csv,text/*"
-              disabled={isLoading}
-              onChange={handleFileInputChange}
-              className="hidden"
-            />
-          </label>
-
-          <button
-            type="button"
-            onClick={onSelectRemote}
-            disabled={isLoading}
-            className={`flex items-center gap-2 px-5 py-2.5 font-semibold text-xs rounded-lg transition-all border disabled:cursor-not-allowed disabled:opacity-45 ${
-              isLight
-                ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
-                : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
-            }`}
-          >
-            <Server className="w-4 h-4" />
-            打开远程文件
-          </button>
-
-          {onOpenBrowse ? (
-            <button
-              type="button"
-              onClick={onOpenBrowse}
-              disabled={isLoading}
-              className={`flex items-center gap-2 px-5 py-2.5 font-semibold text-xs rounded-lg transition-all border disabled:cursor-not-allowed disabled:opacity-45 ${
-                isLight
-                  ? 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
-                  : 'bg-slate-900 hover:bg-indigo-950/60 text-indigo-300 border-indigo-900/70'
-              }`}
-            >
-              <FolderOpen className="w-4 h-4" />
-              远程目录浏览
-            </button>
-          ) : null}
-
-          <button
-            onClick={() => onLoadSample(10000)}
-            disabled={isLoading}
-            className={`flex items-center gap-2 px-5 py-2.5 font-medium text-xs rounded-lg transition-all shadow-xs cursor-pointer active:scale-95 border ${
-              isLight
-                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300/80'
-                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            试用 10,000 行示例日志
-          </button>
-        </div>
-
-        {/* 标准 10 字段日志格式图示规范 */}
-        <div className={`mt-10 pt-6 border-t w-full text-left ${isLight ? 'border-slate-200/80' : 'border-slate-800/80'}`}>
-          <div className={`text-[11px] font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5 ${
-            isLight ? 'text-slate-600' : 'text-slate-400'
-          }`}>
-            <Code className="w-3.5 h-3.5 text-indigo-500" />
-            标准 10 字段日志格式规范 (Nested Bracket Log Syntax)
+    <main className="flex min-h-0 flex-1 overflow-auto bg-canvas">
+      <div className="m-auto grid w-full max-w-[1080px] gap-5 px-4 pb-20 pt-8 sm:px-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <section
+          onDragOver={(event) => { event.preventDefault(); if (!isLoading) setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={drop}
+          className={`flex flex-col justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:px-10 ${over ? 'border-accent bg-accent-soft' : 'border-line-strong/70 bg-surface'}`}
+        >
+          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent"><Upload className="h-5 w-5" /></span>
+          <h1 className="mt-5 text-[22px] font-semibold tracking-tight text-ink">打开一份日志</h1>
+          <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-ink-3">
+            把 .log / .txt / .json 文件拖到这里，或从本机、远程服务器打开。解析后可按级别、时间、字段筛选，定位源码并交给 AI 分析。
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <button type="button" disabled={isLoading} onClick={() => inputRef.current?.click()} className="lv-btn lv-btn-primary h-9 px-4 text-[13px]"><Upload className="h-4 w-4" />选择文件</button>
+            <button type="button" disabled={isLoading} onClick={() => onOpenRemote()} className="lv-btn h-9 px-4 text-[13px]"><HardDrive className="h-4 w-4 text-accent" />远程服务器</button>
+            <button type="button" disabled={isLoading} onClick={onOpenLocal} className="lv-btn lv-btn-ghost h-9 px-3 text-[13px]"><FolderOpen className="h-4 w-4" />按路径打开</button>
           </div>
-          <div className={`p-3.5 border rounded-lg font-mono-dense text-[11px] overflow-x-auto ${
-            isLight ? 'bg-slate-100/80 border-slate-200 text-slate-800' : 'bg-slate-950 border-slate-800/80 text-slate-300'
-          }`}>
-            <div className="text-indigo-600 dark:text-indigo-400 font-semibold mb-1.5">
-              [时间戳][日志级别][请求ID][操作描述][函数名][线程ID][内存地址][模块][文件名][行号]
-            </div>
-            <div className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-              支持“操作描述”内包含任意层级的嵌套中括号，如：<br/>
-              <span className={isLight ? 'text-emerald-700 font-medium' : 'text-emerald-400/90 font-medium'}>
-                [2026-07-30 23:30:00.123][INFO][REQ-890214][User <span className={isLight ? 'text-amber-700 font-semibold' : 'text-amber-300'}>[ID: 9812]</span> executed <span className={isLight ? 'text-amber-700 font-semibold' : 'text-amber-300'}>[Login]</span>][ProcessAuth][T-04][0x7FFF5FBFF040][AuthModule][user_service.cpp][142]
-              </span>
-            </div>
-          </div>
+          <p className="mt-6 text-[12px] text-ink-3">
+            第一次用？
+            <button type="button" disabled={isLoading} onClick={() => onLoadSample(10000)} className="ml-1 font-semibold text-accent hover:underline">载入 10,000 行示例日志</button>
+          </p>
+          <input ref={inputRef} type="file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFileSelected(file); event.target.value = ''; }} />
+        </section>
+
+        <div className="flex min-w-0 flex-col gap-5">
+          <section className="rounded-2xl border border-line bg-surface">
+            <h2 className="flex items-center gap-2 border-b border-line px-4 py-3 text-[12.5px] font-semibold text-ink"><History className="h-4 w-4 text-ink-3" />最近打开</h2>
+            {recent === null ? (
+              <div className="space-y-2 p-4">{[0, 1, 2].map((item) => <div key={item} className="h-8 animate-pulse rounded bg-sunken" />)}</div>
+            ) : recent.length === 0 ? (
+              <p className="px-4 py-6 text-[12px] text-ink-3">打开过的日志会保存快照出现在这里，即使原文件已变化或远程不可达也能重新查看。</p>
+            ) : (
+              <ul className="p-1.5">
+                {recent.map((log) => (
+                  <li key={log.id}>
+                    <button type="button" disabled={isLoading} onClick={() => onOpenHistory(log)} className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-raised" title={log.origin}>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sunken text-ink-3 group-hover:text-accent">{kindIcon(log.kind)}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12.5px] font-medium text-ink">{log.name}</span>
+                        <span className="block truncate font-mono text-[10.5px] text-ink-3">{log.origin}</span>
+                      </span>
+                      <span className="shrink-0 text-right text-[10.5px] text-ink-3">
+                        <span className="block">{when(log.created)}</span>
+                        <span className="block font-mono">{formatFileSize(log.size)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-line bg-surface">
+            <h2 className="flex items-center gap-2 border-b border-line px-4 py-3 text-[12.5px] font-semibold text-ink"><Server className="h-4 w-4 text-ink-3" />远程服务器</h2>
+            {ready.length === 0 ? (
+              <div className="flex items-center justify-between gap-3 px-4 py-4">
+                <p className="text-[12px] text-ink-3">添加 SFTP/SSH 或 SMB 服务器，直接浏览并打开上面的日志。</p>
+                <button type="button" onClick={() => onOpenRemote()} className="lv-btn shrink-0">添加</button>
+              </div>
+            ) : (
+              <ul className="p-1.5">
+                {ready.slice(0, 5).map((item) => (
+                  <li key={item.id}>
+                    <button type="button" onClick={() => onOpenRemote(item.id)} className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-raised">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sunken text-ink-3 group-hover:text-accent"><HardDrive className="h-3.5 w-3.5" /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[12.5px] font-medium text-ink">{item.name}</span>
+                        <span className="block truncate font-mono text-[10.5px] text-ink-3">{item.host}{item.protocol === 'smb' ? ' · SMB' : ''}</span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-ink-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
       </div>
-    </div>
+    </main>
   );
 };

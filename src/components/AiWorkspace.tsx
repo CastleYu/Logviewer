@@ -53,7 +53,7 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
   const busy = current?.state === AiSessionState.Busy || current?.state === AiSessionState.Accepted;
   const queue = current?.queue || [];
   const errors = useMemo(() => logs.filter((item) => ['ERROR', 'FATAL'].includes(String(item.fields?.level || '').toUpperCase())), [logs]);
-  const button = `rounded-md px-2 py-1.5 text-xs disabled:opacity-40 ${light ? 'hover:bg-slate-100' : 'hover:bg-slate-800'}`;
+  const button = 'rounded-md px-2 py-1.5 text-xs hover:bg-sunken hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent';
 
   useEffect(() => {
     let active = true;
@@ -197,13 +197,15 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
   const select = (id: string) => { selection.current += 1; setSelected(id); setDraft(''); setError(''); setNotice(''); };
 
   return <>
-    <div className={`fixed bottom-24 right-4 z-[80] flex max-w-[calc(100vw-24px)] flex-wrap items-center rounded-lg border p-1 shadow-lg ${light ? 'border-slate-200 bg-white text-slate-800' : 'border-slate-700 bg-slate-900 text-slate-100'}`}>
-      <button className={button} onClick={() => setOpen(true)} aria-label="打开 AI 工作区"><Bot className="h-4 w-4" /></button>
+    <div role="toolbar" aria-label="AI 与历史" className={`fixed right-3 z-[80] flex max-w-[calc(100vw-24px)] items-center gap-0.5 rounded-xl border border-line bg-surface p-1 text-ink-2 shadow-[var(--shadow-pop)] ${log ? 'bottom-24' : 'bottom-3'}`}>
+      <button className={`${button} flex items-center gap-1.5 font-semibold text-accent`} onClick={() => setOpen(true)} aria-label="打开 AI 工作区" title="AI 工作区"><Bot className="h-4 w-4" /><span className="hidden sm:inline">AI</span></button>
+      <span className="mx-0.5 h-4 w-px bg-line" />
       <button className={button} disabled={!log || !errors.length || submitting} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`)}>分析 ERROR</button>
       <button className={button} disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`); }}>分析全文</button>
-      <button className={button} onClick={() => setHistoryOpen(true)} aria-label="历史日志"><History className="h-4 w-4" /></button>
-      <button className={button} onClick={onLocalPath} aria-label="打开本地日志"><FolderOpen className="h-4 w-4" /></button>
-      <button className={button} onClick={() => setSettingsOpen(true)} aria-label="AI 设置"><Settings2 className="h-4 w-4" /></button>
+      <span className="mx-0.5 h-4 w-px bg-line" />
+      <button className={button} onClick={() => setHistoryOpen(true)} aria-label="历史日志" title="历史日志"><History className="h-4 w-4" /></button>
+      <button className={button} onClick={onLocalPath} aria-label="打开本地日志" title="按本机路径打开"><FolderOpen className="h-4 w-4" /></button>
+      <button className={button} onClick={() => setSettingsOpen(true)} aria-label="AI 设置" title="AI 设置"><Settings2 className="h-4 w-4" /></button>
     </div>
     <FloatingPanel theme={theme} title={log ? `AI 工作区 · ${log.name}` : 'AI 工作区'} open={open} onClose={() => setOpen(false)} width={740} height={720}>
       <div className="flex h-full min-h-0 flex-col gap-2 p-3">

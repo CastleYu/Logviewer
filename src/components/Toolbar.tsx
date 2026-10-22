@@ -653,14 +653,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-          ) : (
-            <div className={`flex items-center gap-1 py-1 text-[11px] font-mono opacity-40 ${
-              isLight ? 'text-slate-400' : 'text-slate-500'
-            }`}>
-              <Layers className="w-3.5 h-3.5" />
-              <span>未选择行</span>
-            </div>
-          )}
+          ) : null}
         </div>
 
         {currentColumnFilters.length > 0 ? (
@@ -712,7 +705,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         ) : null}
 
         {/* 右侧：配置项 (自动换行、样式设置、列设置、导出、复制日志) */}
-        <div className="flex items-center gap-1.5 flex-wrap ml-auto">
+        <div className="flex shrink-0 items-center gap-1.5 ml-auto">
           {/* 自动换行开关 */}
           {showLegacyFilters ? <button
             onClick={() => onFilterChange({ wordWrap: !filter.wordWrap })}
@@ -728,7 +721,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             title="切换自动换行或单行截断"
           >
             <WrapText className="w-3.5 h-3.5 text-indigo-500" />
-            <span>{filter.wordWrap ? '换行: 开' : '换行: 关'}</span>
+            <span className="hidden 2xl:inline">{filter.wordWrap ? '换行: 开' : '换行: 关'}</span>
           </button> : null}
 
           {/* 样式设置 (整合边框和间距) */}
@@ -745,7 +738,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               title="表格边框强度与行间距密度设置"
             >
               <Grid className="w-3.5 h-3.5 text-indigo-500" />
-              <span>样式设置</span>
+              <span className="hidden 2xl:inline">样式设置</span>
             </button>
 
             {showStyleMenu && (
@@ -933,6 +926,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {showLegacyFilters ? <div className="relative">
             <button
               onClick={handleToggleColumnsMenu}
+              title="列设置"
               className={`flex items-center gap-1 px-2 py-1 rounded-md border cursor-pointer transition-all ${
                 isLight 
                   ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300/80' 
@@ -940,7 +934,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               }`}
             >
               <Eye className="w-3.5 h-3.5 text-indigo-500" />
-              <span>列设置</span>
+              <span className="hidden 2xl:inline">列设置</span>
             </button>
 
             {showColumnsMenu && (
@@ -980,6 +974,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <div className="relative">
             <button
               onClick={handleToggleExportMenu}
+              title="导出筛选结果"
               className={`flex items-center gap-1 px-2 py-1 rounded-md border cursor-pointer transition-all ${
                 isLight 
                   ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200'
@@ -987,7 +982,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               }`}
             >
               <Download className="w-3.5 h-3.5 text-indigo-500" />
-              <span>导出</span>
+              <span className="hidden 2xl:inline">导出</span>
             </button>
 
             {showExportMenu && (
@@ -1037,7 +1032,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             ) : (
               <Copy className="w-3.5 h-3.5 text-indigo-500" />
             )}
-            <span>{copiedNotification ? '已复制' : '复制日志'}</span>
+            <span className="hidden 2xl:inline">{copiedNotification ? '已复制' : '复制日志'}</span>
           </button>
         </div>
       </div>
@@ -1048,7 +1043,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         中间为：搜索高亮
         右侧为：全局搜索 (含多列选择/正规/大小写/定位导航) 和 跳转行
       */}
-      <div className={`flex flex-wrap items-center justify-between gap-2 pt-1 border-t relative ${
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1.5 border-t relative ${
         isLight ? 'border-slate-200/80 text-slate-700' : 'border-slate-800/80 text-slate-300'
       }`}>
         {/* 左侧：模块下拉列表 + 线程下拉列表 + 区间筛选 (统一输入/选择框组件高度 h-[30px]) */}
@@ -1193,7 +1188,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* 中间：搜索高亮组件 (支持多固定高亮与调色盘) */}
-        <div className="flex-1 flex justify-center items-center">
+        <div className="flex items-center">
           <div className={`h-[30px] relative flex items-center rounded-md px-2 border ${
             isLight ? 'bg-slate-50 border-slate-300' : 'bg-slate-900 border-slate-800'
           }`}>

@@ -9,7 +9,8 @@ import { BuiltinFormatId, ConfigError, LogFormatConfig } from './config/logForma
 import { loadLogViewerConfig } from './utils/logConfigLoader';
 import { parseConfiguredLogContent } from './utils/configurableLogParser';
 import { clearConfiguredFilter, configuredFilterSummaries, createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
-import { HeaderDashboard } from './components/HeaderDashboard';
+import { AppHeader } from './components/AppHeader';
+import { StatusBar } from './components/StatusBar';
 import { Toolbar } from './components/Toolbar';
 import { VirtualLogTable } from './components/VirtualLogTable';
 import { DropZone } from './components/DropZone';
@@ -128,6 +129,7 @@ export default function App() {
   const [browseVisible, setBrowseVisible] = useState(false);
   const [browseRequest, setBrowseRequest] = useState<BrowseOpenRequest | null>(null);
   const sourceNav = useSource();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isBusy = LoadState.busy(fileLoad) || isLoading;
 
   const openBrowseWindow = useCallback((profileId?: string, path?: string) => {
@@ -895,9 +897,7 @@ export default function App() {
       onDragOver={handleGlobalDragOver}
       onDragLeave={handleGlobalDragLeave}
       onDrop={handleGlobalDrop}
-      className={`h-screen w-screen flex flex-col overflow-hidden font-sans relative select-none ${
-        theme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-slate-950 text-slate-100'
-      }`}
+      className="h-screen w-screen flex flex-col overflow-hidden font-sans relative select-none bg-canvas text-ink"
     >
       {/* 拖拽全屏 Visual Hover Highlight */}
       {isDragOver && (
@@ -911,23 +911,26 @@ export default function App() {
       )}
 
       {/* 顶部 Header Dashboard */}
-      <HeaderDashboard
+      <AppHeader
         stats={stats}
-        onSelectFile={handleSelectFile}
-        onSelectRemote={() => openBrowseWindow()}
-        onLoadSample={handleLoadSample}
-        onClear={handleClear}
+        origin={historyLog?.origin}
         isLoading={isBusy}
         theme={theme}
-        onToggleTheme={handleToggleTheme}
         formats={formats}
         selectedFormatId={selectedFormat.id}
         configErrors={configErrors}
-        onFormatChange={handleFormatChange}
         stackEnabled={stackMode ?? selectedFormat.record.mode === RecordMode.Stack}
-        onStackChange={handleStackMode}
         sourceFiles={sourceFiles}
+        onOpenLocal={handleSelectFile}
+        onPickFile={() => { if (!isBusy) fileInputRef.current?.click(); }}
+        onOpenRemote={() => openBrowseWindow()}
+        onLoadSample={handleLoadSample}
+        onClear={handleClear}
+        onToggleTheme={handleToggleTheme}
+        onFormatChange={handleFormatChange}
+        onStackChange={handleStackMode}
       />
+      <input ref={fileInputRef} type="file" className="hidden" aria-hidden="true" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; if (file) handleFile(file); event.target.value = ''; }} />
 
       <FileLoadBar
         state={fileLoad}
@@ -942,11 +945,13 @@ export default function App() {
       {/* 主面板内容区 */}
       {logs.length === 0 ? (
         <DropZone
-          onFileSelected={handleFile}
-          onSelectRemote={() => openBrowseWindow()}
-          onLoadSample={handleLoadSample}
           isLoading={isBusy}
-          theme={theme}
+          servers={sftpProfiles}
+          onFileSelected={handleFile}
+          onOpenLocal={handleSelectFile}
+          onOpenRemote={(profileId) => openBrowseWindow(profileId)}
+          onLoadSample={handleLoadSample}
+          onOpenHistory={(log) => void openHistory(log)}
         />
       ) : (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1041,6 +1046,8 @@ export default function App() {
             targetNavLog={targetNavLog}
             onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
           />}
+
+          {stats ? <StatusBar stats={stats} filtered={filteredLogs.length} selected={selectedIds.size} origin={historyLog?.origin} /> : null}
 
           {/* 浮动 ERROR 快捷导航控件 */}
           <FloatingErrorNav
