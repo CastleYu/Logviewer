@@ -113,7 +113,7 @@ export const FloatingErrorNav: React.FC<FloatingErrorNavProps> = ({
   const hasErrors = errorLogs.length > 0;
 
   return (
-    <div className="fixed bottom-6 right-8 z-[9000] flex items-center select-none animate-in fade-in slide-in-from-bottom-4 duration-300">
+    <div className="fixed bottom-6 right-8 z-[60] flex items-center select-none animate-in fade-in slide-in-from-bottom-4 duration-300">
       <div
         className={`flex items-center gap-2.5 p-2.5 rounded-2xl shadow-2xl border backdrop-blur-xl transition-all ${
           isLight

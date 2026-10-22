@@ -209,6 +209,8 @@ export class RemoteUi {
   static readonly ConsoleBlocks = 40;
   static readonly BinaryProbeBytes = 65536;
   static readonly EnvProfileId = 'default';
+  static readonly MinWidth = 420;
+  static readonly MinHeight = 320;
 }
 
 export class RemoteStoreKey {

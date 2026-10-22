@@ -16,9 +16,11 @@ import { DropZone } from './components/DropZone';
 import { FloatingErrorNav } from './components/FloatingErrorNav';
 import { ConfigurableLogTable } from './components/ConfigurableLogTable';
 import { FileLoadBar } from './components/FileLoadBar';
-import { RemoteFileDialog } from './components/RemoteFileDialog';
-import { BrowseOpenRequest, RemoteBrowseWindow } from './components/RemoteBrowseWindow';
-import { DownloadStatus, FileLoadState, LoadPhase, LoadSourceKind, LoadState, SftpProfileView } from './config/fileLoadTypes';
+import { BrowseOpenRequest, RemoteWorkbench } from './components/RemoteWorkbench';
+import { RemoteServerEditor } from './components/RemoteServerEditor';
+import { DownloadStatus, FileLoadState, LoadPhase, LoadSourceKind, LoadState, RemoteOpenOptions, RemoteProtocolKind, RemoteUi, SftpProfileView } from './config/fileLoadTypes';
+import { TextCodec } from './utils/textCodec';
+import { formatFileSize } from './utils/logParser';
 import { RemoteFileApi } from './services/remoteFileApi';
 import { Upload } from 'lucide-react';
 import { RecordMode } from './config/stackTypes';
@@ -121,7 +123,7 @@ export default function App() {
   const loadSequenceRef = useRef(0);
   const parseSequenceRef = useRef(0);
   const cancelledLoadIdsRef = useRef<Set<number>>(new Set());
-  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
+  const [manager, setManager] = useState<{ focus?: string | null } | null>(null);
   const [sftpProfiles, setSftpProfiles] = useState<SftpProfileView[]>([]);
   const [browseVisible, setBrowseVisible] = useState(false);
   const [browseRequest, setBrowseRequest] = useState<BrowseOpenRequest | null>(null);
@@ -427,15 +429,14 @@ export default function App() {
     setLocalPathOpen(true);
   };
 
-  const handleRemoteLoad = useCallback(async (profileId: string, remotePath: string) => {
+  const handleRemoteLoad = useCallback(async (profileId: string, remotePath: string, options: RemoteOpenOptions = {}) => {
     const fileName = remotePath.split('/').filter(Boolean).pop() || '远程文件';
     const loadId = beginLoad(LoadPhase.Downloading, LoadSourceKind.Remote, fileName);
     if (loadId === null) return;
-    const remoteKind = sftpProfiles.find((item) => item.id === profileId)?.protocol === 'smb' ? 'smb' : 'sftp';
-    updateLoad(loadId, { remoteKind });
-    setRemoteDialogOpen(false);
+    const remote = sftpProfiles.find((item) => item.id === profileId);
+    updateLoad(loadId, { remoteKind: remote?.protocol === RemoteProtocolKind.Smb ? 'smb' : 'sftp', tailBytes: options.tailBytes });
     try {
-      let task = await RemoteFileApi.create(profileId, remotePath);
+      let task = await RemoteFileApi.create(profileId, remotePath, options.tailBytes);
       if (cancelledLoadIdsRef.current.delete(loadId) || fileLoadRef.current.id !== loadId) {
         await RemoteFileApi.cancel(task.id).catch(() => undefined);
         return;
@@ -445,21 +446,32 @@ export default function App() {
         await new Promise((resolve) => window.setTimeout(resolve, 250));
         if (fileLoadRef.current.id !== loadId) return;
         task = await RemoteFileApi.task(task.id);
-        updateLoad(loadId, {
-          taskId: task.id,
-          fileName: task.fileName,
-          loadedBytes: task.downloadedBytes,
-          totalBytes: task.totalBytes,
-        });
+        updateLoad(loadId, { taskId: task.id, fileName: task.fileName, loadedBytes: task.downloadedBytes, totalBytes: task.totalBytes });
       }
       if (task.status !== DownloadStatus.Completed) throw new Error(task.error || '远程文件下载未完成');
-      const loaded = await RemoteFileApi.content(task.id);
-      const remote = sftpProfiles.find((item) => item.id === profileId);
-      handleLoadContent(loaded.content, loaded.name, loaded.size, loadId, `${remote?.host || remote?.name || profileId}:${remotePath}`);
+      const { bytes, name } = await RemoteFileApi.bytes(task.id);
+      if (fileLoadRef.current.id !== loadId) return;
+      if (options.save) {
+        const url = URL.createObjectURL(new Blob([bytes]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name.replace(/\.gz$/i, '');
+        link.click();
+        URL.revokeObjectURL(url);
+        finishLoad(loadId);
+        return;
+      }
+      if (TextCodec.binary(bytes)) throw new Error(`${name} 看起来是二进制文件，无法作为日志打开；可以右键“下载到本机”`);
+      const decoded = TextCodec.decode(bytes);
+      const host = remote?.host || remote?.name || profileId;
+      const part = task.skippedBytes ? `（末尾 ${formatFileSize(bytes.byteLength)}，共 ${formatFileSize(task.remoteSize || 0)}）` : '';
+      const label = part ? `${name} · 末尾 ${Math.round(bytes.byteLength / RemoteUi.MB) || '<1'} MB` : name;
+      handleLoadContent(decoded.text, label, bytes.byteLength, loadId, `${host}:${remotePath}${part}${decoded.encoding === TextCodec.Gbk ? '（GBK）' : ''}`);
+      setBrowseVisible(false); // 打开后收起到左下角标签，让出日志视图
     } catch (error) {
       failLoad(loadId, error instanceof Error ? error.message : '远程文件加载失败');
     }
-  }, [beginLoad, failLoad, handleLoadContent, sftpProfiles, updateLoad]);
+  }, [beginLoad, failLoad, finishLoad, handleLoadContent, sftpProfiles, updateLoad]);
 
   const handleCancelLoad = useCallback(() => {
     const current = fileLoadRef.current;
@@ -902,8 +914,7 @@ export default function App() {
       <HeaderDashboard
         stats={stats}
         onSelectFile={handleSelectFile}
-        onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
-        onOpenBrowse={() => openBrowseWindow()}
+        onSelectRemote={() => openBrowseWindow()}
         onLoadSample={handleLoadSample}
         onClear={handleClear}
         isLoading={isBusy}
@@ -932,8 +943,7 @@ export default function App() {
       {logs.length === 0 ? (
         <DropZone
           onFileSelected={handleFile}
-          onSelectRemote={() => { if (!isBusy) setRemoteDialogOpen(true); }}
-          onOpenBrowse={() => openBrowseWindow()}
+          onSelectRemote={() => openBrowseWindow()}
           onLoadSample={handleLoadSample}
           isLoading={isBusy}
           theme={theme}
@@ -1043,25 +1053,22 @@ export default function App() {
         </div>
       )}
       {stackLog?.stack ? <StackDetail log={stackLog} theme={theme} filter={filter} onClose={() => setStackId(null)} /> : null}
-      <RemoteFileDialog
-        open={remoteDialogOpen}
-        profiles={sftpProfiles}
-        busy={isBusy}
-        theme={theme}
-        onClose={() => { if (!isBusy) setRemoteDialogOpen(false); }}
-        onSubmit={handleRemoteLoad}
-        onServersChanged={refreshRemoteProfiles}
-        onBrowseWindow={(profileId, path) => openBrowseWindow(profileId, path)}
-      />
-      <RemoteBrowseWindow
+      <RemoteWorkbench
         visible={browseVisible}
         request={browseRequest}
         profiles={sftpProfiles}
         busy={isBusy}
-        theme={theme}
         onVisible={setBrowseVisible}
-        onOpenFile={handleRemoteLoad}
-        onConfigureServers={() => setRemoteDialogOpen(true)}
+        onOpen={(profileId, path, options) => void handleRemoteLoad(profileId, path, options)}
+        onManage={(focus) => setManager({ focus })}
+        onServersChanged={refreshRemoteProfiles}
+      />
+      <RemoteServerEditor
+        open={manager !== null}
+        focusId={manager?.focus}
+        onClose={() => setManager(null)}
+        onChanged={refreshRemoteProfiles}
+        onBrowse={(server, start) => { setManager(null); refreshRemoteProfiles(); openBrowseWindow(server.id, start); }}
       />
     </div>
   );

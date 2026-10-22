@@ -7,6 +7,7 @@ import express from 'express';
 import { RemoteRegistry } from '../server/config/remoteRegistry';
 import { registerErrorRoute, registerSftpRoutes } from '../server/routes/sftpRoutes';
 import { DownloadService } from '../server/services/downloadService';
+import { middleEllipsis, resolveInput } from '../src/utils/browsePath';
 import { applyBrowseCommand, applyListingAction, completeBrowseInput, listingAction, resolveCd } from '../src/utils/browseCommands';
 import { filterServerProfiles, parseExecOutput, shQuote, wrapRemoteCommand } from '../src/utils/remoteExec';
 import {
@@ -133,24 +134,22 @@ function verifySession(): void {
 }
 
 function verifyWindowSource(): void {
-  const windowSrc = readFileSync(path.resolve('src/components/RemoteBrowseWindow.tsx'), 'utf8');
-  assert.match(windowSrc, /aria-label="目录命令"/);
-  assert.match(windowSrc, /aria-label="远程目录列表"|RemoteFileExplorer/);
-  assert.match(windowSrc, /onPointerDown/);
-  assert.match(windowSrc, /aria-label="隐藏目录窗口"/);
-  assert.match(windowSrc, /aria-label="显示目录窗口"/);
-  assert.match(windowSrc, /shouldFetchBrowseListing\(current/);
-  assert.doesNotMatch(windowSrc, /profileId:\s*profile\.id/);
-  assert.match(windowSrc, /RemoteFileApi\.list\(current\.profileId/);
-  assert.match(windowSrc, /RemoteFileApi\.exec/);
-  assert.match(windowSrc, /ServerPicker/);
-  const pickerSrc = readFileSync(path.resolve('src/components/ServerPicker.tsx'), 'utf8');
-  assert.match(pickerSrc, /搜索服务器/);
-  assert.match(pickerSrc, /filterServerProfiles/);
-  const explorerSrc = readFileSync(path.resolve('src/components/RemoteFileExplorer.tsx'), 'utf8');
-  assert.match(explorerSrc, /onDoubleClick/);
-  assert.match(explorerSrc, /onContextMenu/);
-  assert.match(explorerSrc, /listingAction/);
+  assert.equal(resolveInput('/var/log', 'nginx'), '/var/log/nginx');
+  assert.equal(resolveInput('/var/log', '../lib'), '/var/lib');
+  assert.equal(resolveInput('/var/log', '~', '/home/app'), '/home/app');
+  assert.equal(resolveInput('/var/log', '~/logs/a.log', '/home/app'), '/home/app/logs/a.log');
+  assert.equal(resolveInput('/var/log', ' /opt//x/ '), '/opt/x');
+  const long = '/data/applications/very-long-service-name/releases/2026-10-22/logs/archive';
+  const short = middleEllipsis(long, 40);
+  assert.ok(short.length <= 40, short);
+  assert.ok(short.endsWith('/archive') && short.includes('…'), short);
+  assert.equal(middleEllipsis('/var/log', 40), '/var/log');
+  const bench = readFileSync(path.resolve('src/components/RemoteWorkbench.tsx'), 'utf8');
+  assert.match(bench, /RemoteFileApi\.list\(profileId, path\)/);
+  assert.match(bench, /RemoteConsole/);
+  const list = readFileSync(path.resolve('src/components/RemoteFileList.tsx'), 'utf8');
+  assert.match(list, /onDoubleClick/);
+  assert.match(list, /onContextMenu/);
 }
 
 async function verifyRegistryAndHttp(): Promise<void> {
