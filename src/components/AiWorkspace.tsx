@@ -1,12 +1,11 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, History, FolderOpen, Plus, Settings2, Send, Square, LoaderCircle, Terminal, ListOrdered, X, Play } from 'lucide-react';
+import { Bot, Plus, Settings2, Send, Square, LoaderCircle, Terminal, ListOrdered, X, Play } from 'lucide-react';
 import { AiMode, AiRepositoryOrigin, AiSessionState, type AiConfig, type AiRepositoryState, type AiSession } from '../config/aiTypes';
 import type { SourceTarget } from '../config/sourceTypes';
 import { AiUi } from '../config/aiUiTypes';
 import type { HistoryLog } from '../config/historyTypes';
 import type { LogEntry, ThemeMode } from '../types';
 import { AiApi } from '../services/aiApi';
-import { FloatingPanel } from './FloatingPanel';
 import { HistoryBrowser } from './HistoryBrowser';
 import { AiQuestionForm } from './AiQuestionForm';
 import { AiSettings } from './AiSettings';
@@ -15,12 +14,10 @@ import { AiActivity } from './AiActivity';
 const AiConversation = lazy(() => import('./AiConversation').then((module) => ({ default: module.AiConversation })));
 
 export interface AiWorkspaceRequest { logId: string; nonce: number; text: string; title: string }
-export interface AiWorkspaceProps { theme: ThemeMode; log: HistoryLog | null; logs: LogEntry[]; content: string; request: AiWorkspaceRequest | null; sourceTargets: SourceTarget[]; sourceRevision: number; onRepository?: (repository: string) => void; onOpenHistory: (log: HistoryLog) => void; onLocalPath: () => void }
+export interface AiWorkspaceProps { theme: ThemeMode; log: HistoryLog | null; logs: LogEntry[]; content: string; request: AiWorkspaceRequest | null; sourceTargets: SourceTarget[]; sourceRevision: number; open: boolean; historyOpen: boolean; onOpenChange: (open: boolean) => void; onHistoryOpenChange: (open: boolean) => void; onRepository?: (repository: string) => void; onOpenHistory: (log: HistoryLog) => void; onLocalPath: () => void }
 type SendRun = { cancelled: boolean; logId: string; prompt: string; view: number; sessionId?: string };
 
-export function AiWorkspace({ theme, log, logs, content, request, sourceTargets, sourceRevision, onRepository, onOpenHistory, onLocalPath }: AiWorkspaceProps) {
-  const [open, setOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+export function AiWorkspace({ theme, log, logs, content, request, sourceTargets, sourceRevision, open, historyOpen, onOpenChange, onHistoryOpenChange, onRepository, onOpenHistory }: AiWorkspaceProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState<AiConfig>({ endpoint: 'http://127.0.0.1:4096', executable: 'opencode', launch: false, mode: AiMode.Source, recipe: true });
   const [sessions, setSessions] = useState<AiSession[]>([]);
@@ -95,14 +92,14 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
   }, [current?.id]);
 
   const send = async (prompt: string) => {
-    setOpen(true);
+    onOpenChange(true);
     if (!log || !prompt.trim()) return;
     if (sending.current) return;
     const logId = log.id;
     const view = selection.current;
     const run: SendRun = { cancelled: false, logId, prompt, view, sessionId: current?.id };
     runRef.current = run;
-    sending.current = true; mutation.current += 1; setSubmitting(true); setPending({ logId, sessionId: current?.id, prompt }); setOpen(true); setError(''); setNotice('');
+    sending.current = true; mutation.current += 1; setSubmitting(true); setPending({ logId, sessionId: current?.id, prompt }); onOpenChange(true); setError(''); setNotice('');
     try {
       const sourceMode = (current?.mode || config.mode || AiMode.Source) === AiMode.Source;
       let boundRepository = current?.repository || log.repository;
@@ -197,19 +194,11 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
   const select = (id: string) => { selection.current += 1; setSelected(id); setDraft(''); setError(''); setNotice(''); };
 
   return <>
-    <div role="toolbar" aria-label="AI 与历史" className={`fixed right-3 z-[80] flex max-w-[calc(100vw-24px)] items-center gap-0.5 rounded-xl border border-line bg-surface p-1 text-ink-2 shadow-[var(--shadow-pop)] ${log ? 'bottom-24' : 'bottom-3'}`}>
-      <button className={`${button} flex items-center gap-1.5 font-semibold text-accent`} onClick={() => setOpen(true)} aria-label="打开 AI 工作区" title="AI 工作区"><Bot className="h-4 w-4" /><span className="hidden sm:inline">AI</span></button>
-      <span className="mx-0.5 h-4 w-px bg-line" />
-      <button className={button} disabled={!log || !errors.length || submitting} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`)}>分析 ERROR</button>
-      <button className={button} disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`); }}>分析全文</button>
-      <span className="mx-0.5 h-4 w-px bg-line" />
-      <button className={button} onClick={() => setHistoryOpen(true)} aria-label="历史日志" title="历史日志"><History className="h-4 w-4" /></button>
-      <button className={button} onClick={onLocalPath} aria-label="打开本地日志" title="按本机路径打开"><FolderOpen className="h-4 w-4" /></button>
-      <button className={button} onClick={() => setSettingsOpen(true)} aria-label="AI 设置" title="AI 设置"><Settings2 className="h-4 w-4" /></button>
-    </div>
-    <FloatingPanel theme={theme} title={log ? `AI 工作区 · ${log.name}` : 'AI 工作区'} open={open} onClose={() => setOpen(false)} width={740} height={720}>
-      <div className="flex h-full min-h-0 flex-col gap-2 p-3">
-        <div className="flex flex-wrap items-center gap-2">
+    <section aria-label="AI 工作区" className={`${open ? 'flex' : 'hidden'} fixed inset-x-0 bottom-0 top-12 z-[65] min-h-0 flex-col border-l border-line bg-surface text-ink shadow-[var(--shadow-window)] md:static md:z-auto md:w-[380px] md:shrink-0 md:shadow-none xl:w-[440px]`}>
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3"><Bot className="h-4 w-4 text-accent" /><div className="min-w-0 flex-1"><h2 className="text-xs font-semibold">AI 工作区</h2><p className="truncate text-[10px] text-ink-3">{log?.name || '打开日志后开始分析'}</p></div><button type="button" className="lv-icon-btn h-7 w-7" onClick={() => onOpenChange(false)} aria-label="关闭 AI 工作区"><X className="h-4 w-4" /></button></header>
+      <div className="flex h-full min-h-0 flex-col gap-2 overflow-auto p-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line pb-2"><span className="mr-auto text-[10px] font-semibold text-ink-3">快速分析</span><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !errors.length || submitting} title={`分析 ${errors.length} 条 ERROR/FATAL`} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`)}>分析 ERROR <span className="font-mono text-[10px]">{errors.length}</span></button><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`); }}>分析全文</button></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <select aria-label="AI 会话" value={current?.id || ''} onChange={(event) => select(event.target.value)} className={`min-w-0 flex-1 rounded border p-1.5 text-xs ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-950'}`}><option value="">新会话</option>{cases.map((item) => <option key={item.id} value={item.id}>{new Date(item.created).toLocaleString()} · {item.mode === AiMode.Source ? '源码' : '独立日志'} · {item.id.slice(-6)}</option>)}</select>
           <button className={button} aria-label="新会话" onClick={() => select('')}><Plus className="h-4 w-4" /></button>
           <button className={`${button} flex items-center gap-1`} disabled={!current || acting} title="在此会话目录打开 cmd，恢复同一 OpenCode 会话" onClick={() => current && void act(async () => { await AiApi.terminal(current.id); setNotice('已在服务所在电脑打开 CLI 会话。'); })}><Terminal className="h-4 w-4" />CLI 恢复</button>
@@ -238,8 +227,8 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
         </div>
         <div className="flex shrink-0 flex-wrap justify-between gap-1 text-[11px] text-slate-500"><span>Enter 发送 · Shift+Enter 换行 · 工作中默认排队</span><span role="status">{notice}</span></div>
       </div>
-    </FloatingPanel>
-    <HistoryBrowser theme={theme} open={historyOpen} revision={log?.id} onClose={() => setHistoryOpen(false)} onOpenHistory={(item) => { setHistoryOpen(false); setOpen(true); onOpenHistory(item); }} />
+    </section>
+    <HistoryBrowser theme={theme} open={historyOpen} revision={log?.id} onClose={() => onHistoryOpenChange(false)} onOpenHistory={(item) => { onHistoryOpenChange(false); onOpenChange(true); onOpenHistory(item); }} />
     <AiSettings key={log?.id || 'empty'} theme={theme} open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={setConfig} initial={config} catalog={catalog} repository={repository?.repository || log?.repository} onBind={bindRepository} />
   </>;
 }

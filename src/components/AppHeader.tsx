@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Braces, ChevronDown, FileText, FlaskConical, FolderOpen, HardDrive, Layers3, Moon, ScrollText, Sun, Upload, X } from 'lucide-react';
+import { Bot, Braces, ChevronDown, FileText, FlaskConical, FolderOpen, HardDrive, History, Layers3, Moon, ScrollText, Sun, Upload, X } from 'lucide-react';
 import { SourceSettings } from './SourceSettings';
 import { SourceOpenerSwitch } from './SourceOpenerSwitch';
 import { LogStats, ThemeMode } from '../types';
@@ -24,6 +24,9 @@ interface AppHeaderProps {
   onToggleTheme: () => void;
   onFormatChange: (formatId: string) => void;
   onStackChange: (enabled: boolean) => void;
+  onOpenAi: () => void;
+  onOpenHistory: () => void;
+  aiOpen: boolean;
 }
 
 const samples = [
@@ -35,7 +38,7 @@ const samples = [
 /** 单行应用顶栏：品牌 · 当前文件 · 格式与堆栈 · 打开入口 · 工具。统计数字移到底部状态栏。 */
 export const AppHeader: React.FC<AppHeaderProps> = ({
   stats, origin, isLoading, theme, formats, selectedFormatId, configErrors, stackEnabled, sourceFiles,
-  onOpenLocal, onPickFile, onOpenRemote, onLoadSample, onClear, onToggleTheme, onFormatChange, onStackChange,
+  onOpenLocal, onPickFile, onOpenRemote, onLoadSample, onClear, onToggleTheme, onFormatChange, onStackChange, onOpenAi, onOpenHistory, aiOpen,
 }) => {
   const [menu, setMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -91,6 +94,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <SourceOpenerSwitch files={sourceFiles} light={light} />
         </div>
         <span className="mx-1 hidden h-5 w-px bg-line xl:block" />
+        <button type="button" onClick={onOpenAi} aria-pressed={aiOpen} className={`lv-btn h-[30px] px-2 ${aiOpen ? '!border-accent/40 !bg-accent-soft !text-accent-ink' : ''}`} title="AI 工作区"><Bot className="h-4 w-4" /><span className="hidden lg:inline">AI</span></button>
+        <button type="button" onClick={onOpenHistory} className="lv-icon-btn h-[30px] w-[30px]" aria-label="历史日志" title="历史日志"><History className="h-4 w-4" /></button>
         <button type="button" onClick={onOpenRemote} className="lv-btn h-[30px]" title="远程工作台：浏览服务器目录、执行命令、打开日志">
           <HardDrive className="h-3.5 w-3.5 text-accent" /><span className="hidden sm:inline">远程</span>
         </button>

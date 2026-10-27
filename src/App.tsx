@@ -25,7 +25,8 @@ import { formatFileSize } from './utils/logParser';
 import { RemoteFileApi } from './services/remoteFileApi';
 import { Upload } from 'lucide-react';
 import { RecordMode } from './config/stackTypes';
-import { StackDetail } from './components/StackDetail';
+import { LogInspector } from './components/LogInspector';
+import { SelectionActionBar } from './components/SelectionActionBar';
 import { useSource } from './components/SourceNavigation';
 import { sourceColumns, sourceTarget } from './utils/sourceUtils';
 import { searchText } from './utils/recordEntries';
@@ -92,7 +93,9 @@ export default function App() {
   const [stackMode, setStackMode] = useState<boolean | undefined>(undefined);
   const stackModeRef = useRef<boolean | undefined>(undefined);
   const [stackId, setStackId] = useState<number | null>(null);
-  const openStack = useCallback((log: LogEntry) => setStackId(log.id), []);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const openStack = useCallback((log: LogEntry) => { setStackId(log.id); setInspectorOpen(true); }, []);
+  const closeInspector = useCallback(() => { setStackId(null); setInspectorOpen(false); }, []);
   const [selectedFormatId, setSelectedFormatId] = useState<string>(BuiltinFormatId.LegacyStandard);
   const [configErrors, setConfigErrors] = useState<ConfigError[]>([]);
   const [source, setSource] = useState<LoadedSource | null>(null);
@@ -101,6 +104,8 @@ export default function App() {
   const [historyError, setHistoryError] = useState('');
   const [localPathOpen, setLocalPathOpen] = useState(false);
   const [aiRequest, setAiRequest] = useState<AiWorkspaceRequest | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const analyzeRows = useCallback((rows: LogEntry[]) => {
     if (!historyLog) { setHistoryError('日志快照尚未保存，请稍后重试分析。'); return; }
     setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') });
@@ -741,7 +746,9 @@ export default function App() {
     const idx = Math.min(Math.max(0, currentMatchIndex), searchMatchLogIds.length - 1);
     return searchMatchLogIds[idx];
   }, [searchMatchLogIds, currentMatchIndex]);
+  const selectedLogs = useMemo(() => filteredLogs.filter((log) => selectedIds.has(log.id)), [filteredLogs, selectedIds]);
   const stackLog = useMemo(() => stackId === null ? undefined : logs.find((log) => log.id === stackId), [logs, stackId]);
+  const inspectedLog = stackLog || (inspectorOpen && selectedLogs.length === 1 ? selectedLogs[0] : undefined);
 
   // 点击下一条匹配项：导航并选中
   const handleNextMatch = useCallback(() => {
@@ -812,9 +819,8 @@ export default function App() {
     setFilter((prev) => ({ ...prev, ...updated }));
   };
 
-  // 导出 JSON
-  const handleExportJSON = () => {
-    const blob = new Blob([jsonLogs(filteredLogs)], { type: 'application/json' });
+  const handleExportJSON = (rows: LogEntry[] = filteredLogs) => {
+    const blob = new Blob([jsonLogs(rows)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -823,9 +829,8 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // 导出 CSV
-  const handleExportCSV = () => {
-    const csvContent = csvLogs(filteredLogs, selectedFormat);
+  const handleExportCSV = (rows: LogEntry[] = filteredLogs) => {
+    const csvContent = csvLogs(rows, selectedFormat);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -929,6 +934,9 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         onFormatChange={handleFormatChange}
         onStackChange={handleStackMode}
+        onOpenAi={() => setAiOpen((value) => !value)}
+        onOpenHistory={() => setHistoryOpen(true)}
+        aiOpen={aiOpen}
       />
       <input ref={fileInputRef} type="file" className="hidden" aria-hidden="true" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; if (file) handleFile(file); event.target.value = ''; }} />
 
@@ -938,11 +946,12 @@ export default function App() {
         onCancel={handleCancelLoad}
         onDismiss={() => publishLoad(LoadState.idle())}
       />
-      <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
       {historyError ? <div role="alert" className="px-4 py-2 text-xs text-rose-600">{historyError}</div> : null}
       {localPathOpen ? <LocalFileDialog theme={theme} formatId={selectedFormat.id} onOpen={(log) => void openHistory(log)} onClose={() => setLocalPathOpen(false)} /> : null}
 
       {/* 主面板内容区 */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {logs.length === 0 ? (
         <DropZone
           isLoading={isBusy}
@@ -994,72 +1003,72 @@ export default function App() {
             configuredFilterItems={configuredFilterItems}
             onClearConfiguredFilter={handleClearConfiguredFilter}
             onClearAllConfiguredFilters={handleClearAllConfiguredFilters}
+            format={selectedFormat}
+            logs={logs}
           />
 
-          {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
-          {selectedFormat.builtin ? <VirtualLogTable
-            onAnalyze={analyzeRows}
-            onOpenStack={openStack}
-            logs={filteredLogs}
-            format={selectedFormat}
-            density={density}
-            columnVisibility={columnVisibility}
-            selectedIds={selectedIds}
-            onSelectionChange={setSelectedIds}
-            highlightKeyword={filter.highlightKeyword}
-            highlightMatchCase={filter.highlightMatchCase}
-            highlightIsRegex={filter.highlightIsRegex}
-            matchCase={filter.matchCase}
-            wordWrap={filter.wordWrap}
-            filter={filter}
-            onFilterChange={handleFilterChange}
-            uniqueModules={uniqueModules}
-            uniqueThreads={uniqueThreads}
-            timeRange={timeRange}
-            activeSearchLogId={activeSearchLogId}
-            searchKeyword={filter.searchKeyword}
-            searchMatchCase={filter.matchCase}
-            searchIsRegex={filter.isRegex}
-            columnWidths={columnWidths}
-            onColumnWidthsChange={setColumnWidths}
-            theme={theme}
-            borderIntensity={borderIntensity}
-            jumpToLine={jumpToLine}
-            targetNavLog={targetNavLog}
-            onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
-            legacyBoldSelection={legacyBoldSelection}
-            legacyHighlightStyle={legacyHighlightStyle}
-          /> : <ConfigurableLogTable
-            onAnalyze={analyzeRows}
-            onOpenStack={openStack}
-            logs={filteredLogs}
-            optionLogs={logs}
-            format={selectedFormat}
-            filters={filter.configuredFilters}
-            onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
-            filter={filter}
-            density={density}
-            theme={theme}
-            selectedIds={selectedIds}
-            onSelectionChange={setSelectedIds}
-            activeSearchLogId={activeSearchLogId}
-            targetNavLog={targetNavLog}
-            onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
-          />}
-
-          {stats ? <StatusBar stats={stats} filtered={filteredLogs.length} selected={selectedIds.size} origin={historyLog?.origin} /> : null}
-
-          {/* 浮动 ERROR 快捷导航控件 */}
-          <FloatingErrorNav
-            filteredLogs={filteredLogs}
-            selectedIds={selectedIds}
-            onSelectLog={(id) => setSelectedIds(new Set([id]))}
-            onNavigateToLog={handleNavigateToLog}
-            theme={theme}
-          />
+          <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
+              {selectedFormat.builtin ? <VirtualLogTable
+                onAnalyze={analyzeRows}
+                onOpenStack={openStack}
+                logs={filteredLogs}
+                format={selectedFormat}
+                density={density}
+                columnVisibility={columnVisibility}
+                selectedIds={selectedIds}
+                onSelectionChange={setSelectedIds}
+                highlightKeyword={filter.highlightKeyword}
+                highlightMatchCase={filter.highlightMatchCase}
+                highlightIsRegex={filter.highlightIsRegex}
+                matchCase={filter.matchCase}
+                wordWrap={filter.wordWrap}
+                filter={filter}
+                onFilterChange={handleFilterChange}
+                uniqueModules={uniqueModules}
+                uniqueThreads={uniqueThreads}
+                timeRange={timeRange}
+                activeSearchLogId={activeSearchLogId}
+                searchKeyword={filter.searchKeyword}
+                searchMatchCase={filter.matchCase}
+                searchIsRegex={filter.isRegex}
+                columnWidths={columnWidths}
+                onColumnWidthsChange={setColumnWidths}
+                theme={theme}
+                borderIntensity={borderIntensity}
+                jumpToLine={jumpToLine}
+                targetNavLog={targetNavLog}
+                onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+                legacyBoldSelection={legacyBoldSelection}
+                legacyHighlightStyle={legacyHighlightStyle}
+              /> : <ConfigurableLogTable
+                onAnalyze={analyzeRows}
+                onOpenStack={openStack}
+                logs={filteredLogs}
+                optionLogs={logs}
+                format={selectedFormat}
+                filters={filter.configuredFilters}
+                onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
+                filter={filter}
+                density={density}
+                theme={theme}
+                selectedIds={selectedIds}
+                onSelectionChange={setSelectedIds}
+                activeSearchLogId={activeSearchLogId}
+                targetNavLog={targetNavLog}
+                onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+              />}
+              <SelectionActionBar selectedLogs={selectedLogs} filteredLogs={filteredLogs} format={selectedFormat} theme={theme} onCopyRaw={handleCopySelected} onExportCSV={handleExportCSV} onExportJSON={handleExportJSON} onAnalyze={analyzeRows} onInspect={openStack} onSelectAll={handleSelectAll} onClear={handleClearSelection} />
+              {stats ? <StatusBar stats={stats} filtered={filteredLogs.length} selected={selectedIds.size} origin={historyLog?.origin} navigation={<FloatingErrorNav filteredLogs={filteredLogs} selectedIds={selectedIds} onSelectLog={(id) => setSelectedIds(new Set([id]))} onNavigateToLog={handleNavigateToLog} theme={theme} />} /> : null}
+            </div>
+            {inspectedLog ? <LogInspector log={inspectedLog} format={selectedFormat} filter={filter} theme={theme} sourceOverrides={sourceNav.columns} onClose={closeInspector} /> : null}
+          </div>
         </div>
       )}
-      {stackLog?.stack ? <StackDetail log={stackLog} theme={theme} filter={filter} onClose={() => setStackId(null)} /> : null}
+        </div>
+        <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} open={aiOpen} historyOpen={historyOpen} onOpenChange={setAiOpen} onHistoryOpenChange={setHistoryOpen} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
+      </div>
       <RemoteWorkbench
         visible={browseVisible}
         request={browseRequest}

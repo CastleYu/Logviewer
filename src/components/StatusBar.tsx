@@ -6,10 +6,11 @@ interface StatusBarProps {
   filtered: number;
   selected: number;
   origin?: string;
+  navigation?: React.ReactNode;
 }
 
 /** 底部状态栏：记录数、筛选结果、失败数、解析耗时、来源路径与选择数。 */
-export const StatusBar: React.FC<StatusBarProps> = ({ stats, filtered, selected, origin }) => {
+export const StatusBar: React.FC<StatusBarProps> = ({ stats, filtered, selected, origin, navigation }) => {
   const lines = stats.physicalLineCount ?? stats.totalCount;
   const item = 'flex shrink-0 items-center gap-1.5 whitespace-nowrap';
   return (
@@ -25,6 +26,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({ stats, filtered, selected,
         <span className={`${item} text-danger`} title="无法按当前格式解析的行">解析失败 {stats.failedCount.toLocaleString()}</span>
       ) : <span className={`${item} text-ok`}>全部解析成功</span>}
       <span className={`${item} hidden sm:flex`}>{stats.parseDurationMs} ms</span>
+      {navigation}
       <span className="hidden min-w-0 flex-1 truncate text-right md:block" title={origin}>{origin}</span>
       {selected > 0 ? <span className={`${item} ml-auto text-accent-ink md:ml-0`}>已选 {selected.toLocaleString()}</span> : null}
     </footer>
