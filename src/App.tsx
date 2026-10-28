@@ -36,6 +36,10 @@ import { HistoryKind, type HistoryLog } from './config/historyTypes';
 import { AiWorkspace, type AiWorkspaceRequest } from './components/AiWorkspace';
 import { AiConst } from './config/aiTypes';
 import { LocalFileDialog } from './components/LocalFileDialog';
+import { InvestigationViewDialog } from './components/InvestigationViewDialog';
+import {
+  InvestigationView, loadInvestigationViews, restoreInvestigationFilter, storeInvestigationViews,
+} from './utils/investigationViews';
 
 const defaultColumnWidths: ColumnWidths = {
   index: 48,
@@ -350,6 +354,68 @@ export default function App() {
       localStorage.setItem('LOGVIEWER_LEGACY_HIGHLIGHT_STYLE', String(legacyHighlightStyle));
     } catch {}
   }, [legacyHighlightStyle]);
+
+  const [investigationViews, setInvestigationViews] = useState<InvestigationView[]>(loadInvestigationViews);
+  const [investigationViewsOpen, setInvestigationViewsOpen] = useState(false);
+  const saveInvestigationView = (name: string): boolean => {
+    if (!source || investigationViews.length >= 50) return false;
+    const view: InvestigationView = {
+      version: 1,
+      id: crypto.randomUUID(),
+      name,
+      createdAt: Date.now(),
+      sourceName: source.fileName,
+      formatId: selectedFormat.id,
+      filter: {
+        ...filter,
+        columnFilters: { ...filter.columnFilters },
+        configuredFilters: { ...filter.configuredFilters },
+        pinnedHighlights: (filter.pinnedHighlights || []).map((pin) => ({ ...pin })),
+      },
+      display: {
+        density,
+        columnVisibility: { ...columnVisibility },
+        columnWidths: { ...columnWidths },
+        configuredColumnWidths: { ...(configuredColumnWidths[selectedFormat.id] || {}) },
+        borderIntensity,
+        legacyBoldSelection,
+        legacyHighlightStyle,
+      },
+    };
+    const next = [view, ...investigationViews];
+    try { storeInvestigationViews(next); } catch { return false; }
+    setInvestigationViews(next);
+    return true;
+  };
+  const deleteInvestigationView = (id: string): boolean => {
+    const next = investigationViews.filter((view) => view.id !== id);
+    try { storeInvestigationViews(next); } catch { return false; }
+    setInvestigationViews(next);
+    return true;
+  };
+  const restoreInvestigationView = (view: InvestigationView) => {
+    if (!source || isBusy) return;
+    const format = formats.find((item) => item.id === view.formatId);
+    if (!format) return;
+    setSelectedFormatId(format.id);
+    setFilter(restoreInvestigationFilter(view.filter, createFilterOptions(format)));
+    setDensity(view.display.density);
+    setColumnVisibility(view.display.columnVisibility);
+    setColumnWidths(view.display.columnWidths);
+    setConfiguredColumnWidths((current) => ({ ...current, [format.id]: view.display.configuredColumnWidths }));
+    setBorderIntensity(view.display.borderIntensity);
+    setLegacyBoldSelection(view.display.legacyBoldSelection);
+    setLegacyHighlightStyle(view.display.legacyHighlightStyle);
+    setSelectedIds(new Set());
+    setStackId(null);
+    setJumpToLine(null);
+    setTargetNavLog(null);
+    if (format.id !== selectedFormatId) {
+      const loadId = beginLoad(LoadPhase.Parsing, LoadSourceKind.Reparse, source.fileName, source.fileSize);
+      if (loadId !== null) parseSource(source, format, 10, loadId);
+    }
+    setInvestigationViewsOpen(false);
+  };
 
   const parseSource = useCallback((loaded: LoadedSource, format: LogFormatConfig, delay: number = 10, loadId?: number) => {
     const parseId = ++parseSequenceRef.current;
@@ -965,6 +1031,7 @@ export default function App() {
       />
       {historyError ? <div role="alert" className="px-4 py-2 text-xs text-rose-600">{historyError}</div> : null}
       {localPathOpen ? <LocalFileDialog theme={theme} formatId={selectedFormat.id} onOpen={(log) => void openHistory(log)} onClose={() => setLocalPathOpen(false)} /> : null}
+      {investigationViewsOpen && source ? <InvestigationViewDialog views={investigationViews} sourceName={source.fileName} canRestore={!isBusy && logs.length > 0} theme={theme} onSave={saveInvestigationView} onRestore={restoreInvestigationView} onDelete={deleteInvestigationView} onClose={() => setInvestigationViewsOpen(false)} /> : null}
 
       {/* 主面板内容区 */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -1010,6 +1077,7 @@ export default function App() {
             borderIntensity={borderIntensity}
             onBorderIntensityChange={setBorderIntensity}
             onResetColumnWidths={handleResetColumnWidths}
+            onOpenInvestigationViews={() => setInvestigationViewsOpen(true)}
             onJumpToLine={handleJumpToLine}
             legacyBoldSelection={legacyBoldSelection}
             onLegacyBoldSelectionChange={setLegacyBoldSelection}

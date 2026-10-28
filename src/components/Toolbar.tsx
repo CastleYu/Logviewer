@@ -47,6 +47,7 @@ interface ToolbarProps {
   borderIntensity?: BorderIntensity;
   onBorderIntensityChange?: (intensity: BorderIntensity) => void;
   onResetColumnWidths?: () => void;
+  onOpenInvestigationViews: () => void;
   onJumpToLine?: (lineNumber: number) => void;
   legacyBoldSelection?: boolean;
   onLegacyBoldSelectionChange?: (val: boolean) => void;
@@ -271,6 +272,7 @@ export const Toolbar: React.FC<ToolbarProps> = (props) => {
               <label className="mt-1 flex items-center justify-between px-1"><span>经典高亮边框</span><input type="checkbox" className="accent-indigo-600" checked={legacyHighlightStyle} onChange={(event) => onLegacyHighlightStyleChange?.(event.target.checked)} /></label>
             </> : null}
             <button type="button" className="lv-btn mt-2 w-full" onClick={onResetColumnWidths}>重置默认列宽</button>
+            <button type="button" className="lv-btn mt-1.5 w-full justify-between" onClick={() => { setMenu(null); props.onOpenInvestigationViews(); }}><span>调查视图</span><span className="text-[10px] text-ink-3">保存 / 恢复</span></button>
           </div> : null}
         </div>
         <div className="relative">

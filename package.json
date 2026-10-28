@@ -8,6 +8,7 @@
     "build": "vite build",
     "verify:config": "tsx scripts/verify-log-contract.ts",
     "verify:stack": "tsx scripts/verify-stack.ts",
+    "verify:views": "tsx scripts/verify-investigation-views.ts",
     "verify:sftp-browse": "tsx scripts/verify-sftp-browse.ts",
     "verify:listen": "tsx scripts/verify-listen-backoff.ts",
     "verify:source": "tsx scripts/verify-source.ts",
