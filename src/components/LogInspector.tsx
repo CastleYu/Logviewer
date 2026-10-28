@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Braces, Check, Copy, ExternalLink, FileCode2, ListTree, X } from 'lucide-react';
 import { LogFormatConfig } from '../config/logFormatTypes';
-import { StackRelation, StackStatus } from '../config/stackTypes';
+import { StackRelation, StackStatus, type StackFrame } from '../config/stackTypes';
 import type { SourceColumns } from '../config/sourceTypes';
 import { FilterOptions, LogEntry, ThemeMode } from '../types';
 import { frameCount, stackSummary } from '../utils/stackParser';
@@ -21,6 +21,12 @@ interface LogInspectorProps {
 function valueText(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function FrameSourceLink({ log, frame, format, columns, light }: { log: LogEntry; frame: StackFrame; format: LogFormatConfig; columns: SourceColumns; light: boolean }) {
+  if (!frame.file || frame.line === undefined) return null;
+  const frameLog = { ...log, fields: { ...log.fields, [columns.file]: frame.file, [columns.line]: String(frame.line) } };
+  return <div className="mt-1 inline-flex rounded border border-line align-middle"><SourceMenuItem log={frameLog} format={format} field={columns.file} light={light} onClose={() => undefined} /></div>;
 }
 
 export function LogInspector({ log, format, filter, theme, sourceOverrides, onClose }: LogInspectorProps) {
@@ -65,7 +71,7 @@ export function LogInspector({ log, format, filter, theme, sourceOverrides, onCl
             <section><div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold"><ListTree className="h-3.5 w-3.5 text-accent" />{log.stack.language} · {frameCount(log.stack)} 帧 · {log.stack.status === StackStatus.Complete ? '完整识别' : '部分识别'}</div><p className="break-words font-mono leading-relaxed">{highlighted(stackSummary(log.stack))}</p></section>
             <ol className="space-y-3">{log.stack.exceptions.map((item, index) => <li key={index} className="rounded-md border border-line bg-raised p-2.5">
               <p className="break-words font-mono text-[11px] leading-relaxed"><span className="text-ink-3">#{index + 1} · {item.relation === StackRelation.Root ? '主异常' : item.relation === StackRelation.Cause ? '原因' : item.relation === StackRelation.Context ? '上下文' : '抑制异常'}{item.parent !== undefined ? ` → #${item.parent + 1}` : ''}</span><br /><strong>{item.type || '未识别异常类型'}</strong>{item.message ? `: ${item.message}` : ''}</p>
-              <ol className="mt-2 space-y-1.5">{item.frames.map((frame, frameIndex) => <li key={frameIndex} className="border-t border-line/70 pt-1.5"><pre className="whitespace-pre-wrap break-all font-mono text-[10.5px] leading-relaxed text-ink-2">{frame.raw}{frame.source ? `\n${frame.source.join('\n')}` : ''}</pre><button type="button" className="mt-1 flex items-center gap-1 text-[10px] text-accent-ink" onClick={() => void copy(frame.file ? `${frame.file}${frame.line !== undefined ? `:${frame.line}` : ''}` : frame.name, '已复制帧位置')}><Copy className="h-3 w-3" />复制位置</button></li>)}</ol>
+              <ol className="mt-2 space-y-1.5">{item.frames.map((frame, frameIndex) => <li key={frameIndex} className="border-t border-line/70 pt-1.5"><pre className="whitespace-pre-wrap break-all font-mono text-[10.5px] leading-relaxed text-ink-2">{frame.raw}{frame.source ? `\n${frame.source.join('\n')}` : ''}</pre><div className="flex flex-wrap items-center gap-2"><button type="button" className="mt-1 flex items-center gap-1 text-[10px] text-accent-ink" onClick={() => void copy(frame.file ? `${frame.file}${frame.line !== undefined ? `:${frame.line}` : ''}` : frame.name, '已复制帧位置')}><Copy className="h-3 w-3" />复制位置</button><FrameSourceLink log={log} frame={frame} format={format} columns={columns} light={light} /></div></li>)}</ol>
               {item.omitted !== undefined ? <p className="mt-2 text-[10px] text-ink-3">省略 {item.omitted} 个公共帧</p> : null}
             </li>)}</ol>
             <button type="button" className="lv-btn w-full" onClick={() => void copy(log.stack!.raw, '已复制堆栈原文')}><Copy className="h-3.5 w-3.5" />仅复制堆栈</button>

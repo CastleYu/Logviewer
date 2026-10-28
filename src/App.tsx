@@ -108,7 +108,9 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const analyzeRows = useCallback((rows: LogEntry[]) => {
     if (!historyLog) { setHistoryError('日志快照尚未保存，请稍后重试分析。'); return; }
-    setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') });
+    const lines = rows.map((row) => row.lineNumber);
+    const sourceScope = lines.length > 8 ? `${lines[0]}–${lines[lines.length - 1]}` : lines.join('、');
+    setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, scope: `选中 ${rows.length.toLocaleString()} 条 · 源行 ${sourceScope}`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') });
   }, [historyLog?.id]);
 
   const remember = useCallback((loaded: LoadedSource, kind: HistoryKind, origin: string, formatId: string, existing?: HistoryLog) => {

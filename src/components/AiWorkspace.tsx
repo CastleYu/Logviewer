@@ -13,12 +13,13 @@ import { AiActivity } from './AiActivity';
 
 const AiConversation = lazy(() => import('./AiConversation').then((module) => ({ default: module.AiConversation })));
 
-export interface AiWorkspaceRequest { logId: string; nonce: number; text: string; title: string }
+export interface AiWorkspaceRequest { logId: string; nonce: number; text: string; title: string; scope: string }
 export interface AiWorkspaceProps { theme: ThemeMode; log: HistoryLog | null; logs: LogEntry[]; content: string; request: AiWorkspaceRequest | null; sourceTargets: SourceTarget[]; sourceRevision: number; open: boolean; historyOpen: boolean; onOpenChange: (open: boolean) => void; onHistoryOpenChange: (open: boolean) => void; onRepository?: (repository: string) => void; onOpenHistory: (log: HistoryLog) => void; onLocalPath: () => void }
 type SendRun = { cancelled: boolean; logId: string; prompt: string; view: number; sessionId?: string };
 
 export function AiWorkspace({ theme, log, logs, content, request, sourceTargets, sourceRevision, open, historyOpen, onOpenChange, onHistoryOpenChange, onRepository, onOpenHistory }: AiWorkspaceProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [contextScope, setContextScope] = useState('当前日志 · 自由提问');
   const [config, setConfig] = useState<AiConfig>({ endpoint: 'http://127.0.0.1:4096', executable: 'opencode', launch: false, mode: AiMode.Source, recipe: true });
   const [sessions, setSessions] = useState<AiSession[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -91,10 +92,11 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
     return () => { active = false; };
   }, [current?.id]);
 
-  const send = async (prompt: string) => {
+  const send = async (prompt: string, scope = '当前日志 · 自由提问') => {
     onOpenChange(true);
     if (!log || !prompt.trim()) return;
     if (sending.current) return;
+    setContextScope(scope);
     const logId = log.id;
     const view = selection.current;
     const run: SendRun = { cancelled: false, logId, prompt, view, sessionId: current?.id };
@@ -150,7 +152,7 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
     const next = deferredRequests.find((item) => item.logId === log.id);
     if (!next) return;
     setDeferredRequests((items) => items.filter((item) => item.nonce !== next.nonce));
-    void send(`${next.title}\n\n${next.text}`);
+    void send(`${next.title}\n\n${next.text}`, next.scope);
   }, [deferredRequests, submitting, log?.id]);
   const stop = async (session?: AiSession) => {
     const run = visibleRun ? runRef.current : null;
@@ -191,13 +193,14 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
     try { await action(); mutation.current += 1; setSessions((await AiApi.state()).sessions); setError(''); } catch (cause) { setError((cause as Error).message); }
     finally { mutation.current += 1; setActing(false); }
   };
-  const select = (id: string) => { selection.current += 1; setSelected(id); setDraft(''); setError(''); setNotice(''); };
+  const select = (id: string) => { selection.current += 1; setSelected(id); setDraft(''); setError(''); setNotice(''); setContextScope(id ? '历史会话 · 原文范围见消息' : '当前日志 · 自由提问'); };
 
   return <>
     <section aria-label="AI 工作区" className={`${open ? 'flex' : 'hidden'} fixed inset-x-0 bottom-0 top-12 z-[65] min-h-0 flex-col border-l border-line bg-surface text-ink shadow-[var(--shadow-window)] md:static md:z-auto md:w-[380px] md:shrink-0 md:shadow-none xl:w-[440px]`}>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3"><Bot className="h-4 w-4 text-accent" /><div className="min-w-0 flex-1"><h2 className="text-xs font-semibold">AI 工作区</h2><p className="truncate text-[10px] text-ink-3">{log?.name || '打开日志后开始分析'}</p></div><button type="button" className="lv-icon-btn h-7 w-7" onClick={() => onOpenChange(false)} aria-label="关闭 AI 工作区"><X className="h-4 w-4" /></button></header>
       <div className="flex h-full min-h-0 flex-col gap-2 overflow-auto p-3">
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line pb-2"><span className="mr-auto text-[10px] font-semibold text-ink-3">快速分析</span><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !errors.length || submitting} title={`分析 ${errors.length} 条 ERROR/FATAL`} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`)}>分析 ERROR <span className="font-mono text-[10px]">{errors.length}</span></button><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`); }}>分析全文</button></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line pb-2"><span className="mr-auto text-[10px] font-semibold text-ink-3">快速分析</span><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !errors.length || submitting} title={`分析 ${errors.length} 条 ERROR/FATAL`} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`, `全部 ERROR/FATAL · ${errors.length.toLocaleString()} 条`)}>分析 ERROR <span className="font-mono text-[10px]">{errors.length}</span></button><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`, `完整日志 · ${logs.length.toLocaleString()} 条 · ${content.length.toLocaleString()} 字符`); }}>分析全文</button></div>
+        <p className="shrink-0 truncate rounded bg-raised px-2 py-1 text-[10px] text-ink-3" title={contextScope}>最近请求上下文：{contextScope}</p>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <select aria-label="AI 会话" value={current?.id || ''} onChange={(event) => select(event.target.value)} className={`min-w-0 flex-1 rounded border p-1.5 text-xs ${light ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-950'}`}><option value="">新会话</option>{cases.map((item) => <option key={item.id} value={item.id}>{new Date(item.created).toLocaleString()} · {item.mode === AiMode.Source ? '源码' : '独立日志'} · {item.id.slice(-6)}</option>)}</select>
           <button className={button} aria-label="新会话" onClick={() => select('')}><Plus className="h-4 w-4" /></button>
