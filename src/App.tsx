@@ -252,8 +252,23 @@ export default function App() {
     } catch {}
   }, [columnWidths]);
 
+  const [configuredColumnWidths, setConfiguredColumnWidths] = useState<Record<string, Record<string, number>>>(() => {
+    try {
+      const saved = localStorage.getItem('LOGVIEWER_CONFIG_COLUMN_WIDTHS');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('LOGVIEWER_CONFIG_COLUMN_WIDTHS', JSON.stringify(configuredColumnWidths));
+    } catch {}
+  }, [configuredColumnWidths]);
+
   const handleResetColumnWidths = () => {
     setColumnWidths(defaultColumnWidths);
+    setConfiguredColumnWidths((current) => ({ ...current, [selectedFormatId]: {} }));
     try {
       localStorage.setItem('LOGVIEWER_COLUMN_WIDTHS', JSON.stringify(defaultColumnWidths));
     } catch {}
@@ -1058,6 +1073,9 @@ export default function App() {
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
                 activeSearchLogId={activeSearchLogId}
+                columnWidths={configuredColumnWidths[selectedFormat.id] || {}}
+                onColumnWidthsChange={(widths) => setConfiguredColumnWidths((current) => ({ ...current, [selectedFormat.id]: widths }))}
+                jumpToLine={jumpToLine}
                 targetNavLog={targetNavLog}
                 onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
               />}
