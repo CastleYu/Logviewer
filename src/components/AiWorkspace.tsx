@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Plus, Settings2, Send, Square, LoaderCircle, Terminal, ListOrdered, X, Play } from 'lucide-react';
+import { Plus, Settings2, Send, Square, LoaderCircle, Terminal, ListOrdered, X, Play } from 'lucide-react';
 import { AiMode, AiRepositoryOrigin, AiSessionState, type AiConfig, type AiRepositoryState, type AiSession } from '../config/aiTypes';
 import type { SourceTarget } from '../config/sourceTypes';
 import { AiUi } from '../config/aiUiTypes';
@@ -10,6 +10,7 @@ import { HistoryBrowser } from './HistoryBrowser';
 import { AiQuestionForm } from './AiQuestionForm';
 import { AiSettings } from './AiSettings';
 import { AiActivity } from './AiActivity';
+import { FloatingPanel } from './FloatingPanel';
 
 const AiConversation = lazy(() => import('./AiConversation').then((module) => ({ default: module.AiConversation })));
 
@@ -196,9 +197,8 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
   const select = (id: string) => { selection.current += 1; setSelected(id); setDraft(''); setError(''); setNotice(''); setContextScope(id ? '历史会话 · 原文范围见消息' : '当前日志 · 自由提问'); };
 
   return <>
-    <section aria-label="AI 工作区" className={`${open ? 'flex' : 'hidden'} fixed inset-x-0 bottom-0 top-12 z-[65] min-h-0 flex-col border-l border-line bg-surface text-ink shadow-[var(--shadow-window)] md:static md:z-auto md:w-[380px] md:shrink-0 md:shadow-none xl:w-[440px]`}>
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3"><Bot className="h-4 w-4 text-accent" /><div className="min-w-0 flex-1"><h2 className="text-xs font-semibold">AI 工作区</h2><p className="truncate text-[10px] text-ink-3">{log?.name || '打开日志后开始分析'}</p></div><button type="button" className="lv-icon-btn h-7 w-7" onClick={() => onOpenChange(false)} aria-label="关闭 AI 工作区"><X className="h-4 w-4" /></button></header>
-      <div className="flex h-full min-h-0 flex-col gap-2 overflow-auto p-3">
+    <FloatingPanel theme={theme} title={`AI 工作区 · ${log?.name || '打开日志后开始分析'}`} open={open} onClose={() => onOpenChange(false)} width={480} height={640}>
+      <div className="flex h-full min-h-0 flex-col gap-2 overflow-auto bg-surface p-3 text-ink">
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line pb-2"><span className="mr-auto text-[10px] font-semibold text-ink-3">快速分析</span><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !errors.length || submitting} title={`分析 ${errors.length} 条 ERROR/FATAL`} onClick={() => void send(`请分析全部 ${errors.length} 条 ERROR/FATAL 日志，识别首个异常和级联错误：\n\n${errors.map((item) => `[日志行 ${item.lineNumber}]\n${item.rawText}`).join('\n\n')}`, `全部 ERROR/FATAL · ${errors.length.toLocaleString()} 条`)}>分析 ERROR <span className="font-mono text-[10px]">{errors.length}</span></button><button className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !content || submitting} onClick={() => { if (window.confirm(`将发送全文：${content.length.toLocaleString()} 个字符，粗估 ${Math.ceil(content.length / 2).toLocaleString()} tokens。长日志可能超过模型上下文，是否继续？`)) void send(`请分析以下完整日志：\n\n${content}`, `完整日志 · ${logs.length.toLocaleString()} 条 · ${content.length.toLocaleString()} 字符`); }}>分析全文</button></div>
         <p className="shrink-0 truncate rounded bg-raised px-2 py-1 text-[10px] text-ink-3" title={contextScope}>最近请求上下文：{contextScope}</p>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -230,7 +230,7 @@ export function AiWorkspace({ theme, log, logs, content, request, sourceTargets,
         </div>
         <div className="flex shrink-0 flex-wrap justify-between gap-1 text-[11px] text-slate-500"><span>Enter 发送 · Shift+Enter 换行 · 工作中默认排队</span><span role="status">{notice}</span></div>
       </div>
-    </section>
+    </FloatingPanel>
     <HistoryBrowser theme={theme} open={historyOpen} revision={log?.id} onClose={() => onHistoryOpenChange(false)} onOpenHistory={(item) => { onHistoryOpenChange(false); onOpenChange(true); onOpenHistory(item); }} />
     <AiSettings key={log?.id || 'empty'} theme={theme} open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={setConfig} initial={config} catalog={catalog} repository={repository?.repository || log?.repository} onBind={bindRepository} />
   </>;

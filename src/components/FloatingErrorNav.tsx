@@ -40,11 +40,11 @@ export const FloatingErrorNav: React.FC<FloatingErrorNavProps> = ({ filteredLogs
   }, [errorLogs, selectedId, positions]);
 
   return (
-    <nav aria-label="错误日志导航" className="flex shrink-0 items-center gap-0.5 whitespace-nowrap border-l border-line pl-2 text-[11px]">
-      <AlertCircle className={`mr-0.5 h-3.5 w-3.5 ${errorLogs.length ? 'text-danger' : 'text-ink-3'}`} />
+    <nav aria-label="错误日志导航" className="ml-auto flex h-8 shrink-0 items-center gap-1 whitespace-nowrap border-l border-line pl-2 text-xs">
+      <AlertCircle className={`mr-0.5 h-4 w-4 ${errorLogs.length ? 'text-danger' : 'text-ink-3'}`} />
       <span className={errorLogs.length ? 'font-semibold text-danger' : 'text-ink-3'} title="ERROR / FATAL / 解析失败">{currentIndex >= 0 ? `${currentIndex + 1}/` : ''}{errorLogs.length.toLocaleString()} 错误</span>
-      <button type="button" className="lv-icon-btn h-5 w-5" disabled={!errorLogs.length} onClick={() => navigate(-1)} aria-label="上一个错误" title="上一个错误 · Shift+F2"><ChevronUp className="h-3.5 w-3.5" /></button>
-      <button type="button" className="lv-icon-btn h-5 w-5" disabled={!errorLogs.length} onClick={() => navigate(1)} aria-label="下一个错误" title="下一个错误 · F2"><ChevronDown className="h-3.5 w-3.5" /></button>
+      <button type="button" className="lv-icon-btn h-7 w-7" disabled={!errorLogs.length} onClick={() => navigate(-1)} aria-label="上一个错误" title="上一个错误 · Shift+F2"><ChevronUp className="h-4 w-4" /></button>
+      <button type="button" className="lv-icon-btn h-7 w-7" disabled={!errorLogs.length} onClick={() => navigate(1)} aria-label="下一个错误" title="下一个错误 · F2"><ChevronDown className="h-4 w-4" /></button>
       <kbd className="lv-kbd hidden xl:inline-flex">F2</kbd>
     </nav>
   );

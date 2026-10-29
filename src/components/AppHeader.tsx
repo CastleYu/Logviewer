@@ -35,7 +35,7 @@ const samples = [
   { label: '压力测试', count: 50000 },
 ];
 
-/** 单行应用顶栏：品牌 · 当前文件 · 格式与堆栈 · 打开入口 · 工具。统计数字移到底部状态栏。 */
+/** 单行应用顶栏：品牌 · 当前文件 · 格式与堆栈 · 打开入口 · 工具。文件统计收进文件名提示。 */
 export const AppHeader: React.FC<AppHeaderProps> = ({
   stats, origin, isLoading, theme, formats, selectedFormatId, configErrors, stackEnabled, sourceFiles,
   onOpenLocal, onPickFile, onOpenRemote, onLoadSample, onClear, onToggleTheme, onFormatChange, onStackChange, onOpenAi, onOpenHistory, aiOpen,
@@ -44,6 +44,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const light = theme === 'light';
   const format = formats.find((item) => item.id === selectedFormatId) || formats[0];
+  const fileDetails = stats ? [
+    `文件：${stats.fileName}`,
+    `来源：${origin || '本地文件'}`,
+    `解析记录：${stats.totalCount.toLocaleString()} 条`,
+    `物理行数：${(stats.physicalLineCount ?? stats.totalCount).toLocaleString()} 行`,
+    `解析耗时：${stats.parseDurationMs.toFixed(1)} ms`,
+    `解析失败：${stats.failedCount.toLocaleString()} 条`,
+  ].join('\n') : '';
 
   useEffect(() => {
     if (!menu) return;
@@ -64,7 +72,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
 
       {stats ? (
-        <div className="flex min-w-0 max-w-[min(420px,38vw)] items-center gap-2 rounded-lg border border-line bg-raised py-1 pl-2.5 pr-1" title={origin || stats.fileName}>
+        <div className="flex min-w-0 max-w-[min(420px,38vw)] items-center gap-2 rounded-lg border border-line bg-raised py-1 pl-2.5 pr-1" title={fileDetails}>
           <FileText className="h-3.5 w-3.5 shrink-0 text-accent" />
           <span className="min-w-12 truncate text-[12.5px] font-semibold">{stats.fileName}</span>
           <span className="hidden shrink-0 font-mono text-[11px] text-ink-3 sm:inline">{formatFileSize(stats.fileSize)}</span>

@@ -8,9 +8,8 @@ import { createBuiltinLogFormat } from './config/defaultLogFormat';
 import { BuiltinFormatId, ConfigError, LogFormatConfig } from './config/logFormatTypes';
 import { loadLogViewerConfig } from './utils/logConfigLoader';
 import { parseConfiguredLogContent } from './utils/configurableLogParser';
-import { clearConfiguredFilter, configuredFilterSummaries, createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
+import { configuredFilterSummaries, createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
 import { AppHeader } from './components/AppHeader';
-import { StatusBar } from './components/StatusBar';
 import { Toolbar } from './components/Toolbar';
 import { VirtualLogTable } from './components/VirtualLogTable';
 import { DropZone } from './components/DropZone';
@@ -280,6 +279,11 @@ export default function App() {
 
   // 1. 过滤条件状态
   const [filter, setFilter] = useState<FilterOptions>(() => createFilterOptions(createBuiltinLogFormat()));
+  const [investigationMode, setInvestigationMode] = useState<'navigate' | 'highlight'>('navigate');
+  const displayFilter = useMemo(
+    () => investigationMode === 'highlight' ? { ...filter, searchKeyword: '' } : filter,
+    [filter, investigationMode],
+  );
 
   const selectedFormat = useMemo(
     () => formats.find((format) => format.id === selectedFormatId) || formats[0],
@@ -774,9 +778,9 @@ export default function App() {
     setHistoryLog((old) => old?.id === id ? { ...old, repository } : old);
   }, [historyLog?.id]);
 
-  // 计算全文搜索匹配的日志 ID 列表 (支持指定单列/多列与全文搜索，用于定位导航与条数统计)
+  // 计算全文搜索匹配的日志 ID 列表；高亮模式不执行定位搜索。
   const searchMatchLogIds = useMemo(() => {
-    if (!filter.searchKeyword || !filter.searchKeyword.trim()) return [];
+    if (investigationMode === 'highlight' || !filter.searchKeyword || !filter.searchKeyword.trim()) return [];
     let regex: RegExp | null = null;
     try {
       const pattern = filter.isRegex ? filter.searchKeyword : filter.searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -785,8 +789,8 @@ export default function App() {
       return [];
     }
     const ids: number[] = [];
-    const searchCols = filter.searchColumns && filter.searchColumns.length > 0 
-      ? filter.searchColumns 
+    const searchCols = filter.searchColumns && filter.searchColumns.length > 0
+      ? filter.searchColumns
       : (filter.searchColumn ? [filter.searchColumn] : ['ALL']);
     const isAllCols = searchCols.includes('ALL');
 
@@ -815,7 +819,7 @@ export default function App() {
       }
     }
     return ids;
-  }, [filteredLogs, filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns]);
+  }, [filteredLogs, filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns, investigationMode]);
 
   const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
   const firstVisibleIndexRef = useRef<number>(0);
@@ -956,16 +960,6 @@ export default function App() {
     () => selectedFormat.builtin ? undefined : selectedFormat.fields.map((field) => ({ key: field.id, label: field.label })),
     [selectedFormat],
   );
-  const handleClearConfiguredFilter = (fieldId: string) => {
-    setFilter((previous) => ({
-      ...previous,
-      configuredFilters: clearConfiguredFilter(selectedFormat, previous.configuredFilters, fieldId),
-    }));
-  };
-  const handleClearAllConfiguredFilters = () => {
-    setFilter((previous) => ({ ...previous, configuredFilters: createConfiguredFilters(selectedFormat) }));
-  };
-
   const openHistory = async (log: HistoryLog) => {
     const id = beginLoad(LoadPhase.Reading, LoadSourceKind.Local, log.name, log.size);
     if (id === null) return;
@@ -1056,7 +1050,6 @@ export default function App() {
             onDensityChange={setDensity}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={setColumnVisibility}
-            stats={stats}
             filteredCount={filteredLogs.length}
             uniqueModules={uniqueModules}
             uniqueThreads={uniqueThreads}
@@ -1073,6 +1066,9 @@ export default function App() {
             onTriggerSearch={handleTriggerSearch}
             onNextMatch={handleNextMatch}
             onPrevMatch={handlePrevMatch}
+            searchMode={investigationMode}
+            onSearchModeChange={setInvestigationMode}
+            navigation={<FloatingErrorNav filteredLogs={filteredLogs} selectedIds={selectedIds} onSelectLog={(id) => setSelectedIds(new Set([id]))} onNavigateToLog={handleNavigateToLog} theme={theme} />}
             theme={theme}
             borderIntensity={borderIntensity}
             onBorderIntensityChange={setBorderIntensity}
@@ -1086,8 +1082,6 @@ export default function App() {
             showLegacyFilters={Boolean(selectedFormat.builtin)}
             searchableFields={searchableFields}
             configuredFilterItems={configuredFilterItems}
-            onClearConfiguredFilter={handleClearConfiguredFilter}
-            onClearAllConfiguredFilters={handleClearAllConfiguredFilters}
             format={selectedFormat}
             logs={logs}
           />
@@ -1109,13 +1103,13 @@ export default function App() {
                 highlightIsRegex={filter.highlightIsRegex}
                 matchCase={filter.matchCase}
                 wordWrap={filter.wordWrap}
-                filter={filter}
+                filter={displayFilter}
                 onFilterChange={handleFilterChange}
                 uniqueModules={uniqueModules}
                 uniqueThreads={uniqueThreads}
                 timeRange={timeRange}
                 activeSearchLogId={activeSearchLogId}
-                searchKeyword={filter.searchKeyword}
+                searchKeyword={displayFilter.searchKeyword}
                 searchMatchCase={filter.matchCase}
                 searchIsRegex={filter.isRegex}
                 columnWidths={columnWidths}
@@ -1135,7 +1129,7 @@ export default function App() {
                 format={selectedFormat}
                 filters={filter.configuredFilters}
                 onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
-                filter={filter}
+                filter={displayFilter}
                 density={density}
                 theme={theme}
                 selectedIds={selectedIds}
@@ -1147,8 +1141,7 @@ export default function App() {
                 targetNavLog={targetNavLog}
                 onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
               />}
-              <SelectionActionBar selectedLogs={selectedLogs} filteredLogs={filteredLogs} format={selectedFormat} theme={theme} onCopyRaw={handleCopySelected} onExportCSV={handleExportCSV} onExportJSON={handleExportJSON} onAnalyze={analyzeRows} onInspect={openStack} onSelectAll={handleSelectAll} onClear={handleClearSelection} />
-              {stats ? <StatusBar stats={stats} filtered={filteredLogs.length} selected={selectedIds.size} origin={historyLog?.origin} navigation={<FloatingErrorNav filteredLogs={filteredLogs} selectedIds={selectedIds} onSelectLog={(id) => setSelectedIds(new Set([id]))} onNavigateToLog={handleNavigateToLog} theme={theme} />} /> : null}
+              <SelectionActionBar selectedLogs={selectedLogs} filteredLogs={filteredLogs} format={selectedFormat} theme={theme} onCopyRaw={handleCopySelected} onExportCSV={handleExportCSV} onExportJSON={handleExportJSON} onAnalyze={analyzeRows} onSelectAll={handleSelectAll} onClear={handleClearSelection} />
             </div>
             {inspectedLog ? <LogInspector log={inspectedLog} format={selectedFormat} filter={filter} theme={theme} sourceOverrides={sourceNav.columns} onClose={closeInspector} /> : null}
           </div>
