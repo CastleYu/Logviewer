@@ -1,4 +1,4 @@
-import { SourceConfig, SourceConst, SourceMatch, SourceOpener, SourceState, SourceTarget } from '../config/sourceTypes';
+import { SourceConst, SourceMatch, SourceOpener, SourceState, SourceTarget } from '../config/sourceTypes';
 
 export class SourceApi {
   static async request<T>(route: string, body?: unknown, method?: string): Promise<T> {
@@ -12,7 +12,7 @@ export class SourceApi {
     return data;
   }
   static state(): Promise<SourceState> { return this.request(SourceConst.Config); }
-  static rebuild(config: SourceConfig): Promise<SourceState> { return this.request(SourceConst.Rebuild, config); }
+  static rebuild(config: { roots: string[]; openers?: SourceOpener[] }): Promise<SourceState> { return this.request(SourceConst.Rebuild, config); }
   static addRoot(path: string): Promise<SourceState> {
     return this.request(SourceConst.Root, { path });
   }

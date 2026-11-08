@@ -70,19 +70,20 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
     };
   }, [busy, onClose]);
 
-  const apply = (next: SourceState, message?: string) => {
+  const apply = (next: SourceState, message?: string, keepOpeners = false) => {
     setState(next);
-    setOpeners(next.openers);
+    if (!keepOpeners) setOpeners(next.openers);
     setError(next.error || '');
     source.refresh();
     if (message) source.notify(message);
   };
 
-  const run = async (work: () => Promise<SourceState>, message?: string) => {
+  const run = async (work: () => Promise<SourceState>, message?: string | ((next: SourceState) => string), keepOpeners = false) => {
     setBusy(true);
     setError('');
     try {
-      apply(await work(), message);
+      const next = await work();
+      apply(next, typeof message === 'function' ? message(next) : message, keepOpeners);
       return true;
     } catch (cause) {
       setError((cause as Error).message);
@@ -97,8 +98,9 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
   };
 
   const persistOpeners = (next: SourceOpener[], message?: string) => {
+    const previous = openers;
     setOpeners(next);
-    void run(() => SourceApi.saveOpeners(next), message);
+    void run(() => SourceApi.saveOpeners(next), message).then((ok) => { if (!ok) setOpeners(previous); });
   };
 
   const inputClass = `mt-1 w-full rounded-md border px-2 py-2 text-xs outline-none focus:border-indigo-500 ${light ? 'border-slate-300 bg-white' : 'border-slate-600 bg-slate-950'}`;
@@ -202,7 +204,10 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
                   type="button"
                   disabled={busy || rootsInfo.length === 0}
                   aria-label="重建全部索引"
-                  onClick={() => void run(() => SourceApi.rebuild({ roots: state.roots, openers }), `已重建全部索引：${state.count} 个文件`)}
+                  onClick={() => {
+                    const dirty = JSON.stringify(openers) !== JSON.stringify(state.openers);
+                    void run(() => SourceApi.rebuild({ roots: state.roots }), (next) => `已重建全部索引：${next.count} 个文件`, dirty);
+                  }}
                   className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
                 >
                   <RefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} />

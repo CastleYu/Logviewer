@@ -37,6 +37,10 @@ async function verify(): Promise<void> {
     assert.equal(state.count, 7, 'overlapping roots must not duplicate paths');
     assert.equal(service.lookup('abs/path/only.py').length, 1);
     assert.equal(service.lookup('same.py').length, 2);
+    const narrowed = service.lookup(path.join('a', 'same.py'));
+    assert.equal(narrowed.length, 1);
+    assert.equal(narrowed[0].path, path.join(project, 'a', 'same.py'));
+    assert.equal(service.lookup('missing/same.py').length, 2, 'unknown suffix keeps every basename match');
     assert.equal(service.lookup('missing.py').length, 0);
     assert.equal(service.lookup('readme.txt')[0].openerId, null);
     for (const [file, ide] of [['only.py', SourceIde.PyCharm], ['Main.java', SourceIde.Idea], ['main.c', SourceIde.Clion], ['main.cpp', SourceIde.Clion]] as const) {
@@ -63,6 +67,9 @@ async function verify(): Promise<void> {
     assert.equal(patternMatches('Controller$', 'UserController'), true);
     assert.equal(matchOpener('main.cpp', openers)?.id, SourceIde.Clion);
     assert.deepEqual(openerLaunchArgs(programs[SourceIde.PyCharm], 'a.py', 9), [SourceConst.LineArg, '9', 'a.py']);
+    assert.deepEqual(openerLaunchArgs(path.join(root, 'code.cmd'), 'a.ts', 4), ['-r', '-g', 'a.ts:4']);
+    await service.open(path.join('a', 'same.py'), path.join(project, 'b', 'same.py'), 3);
+    assert.equal(calls.at(-1)?.args.at(-1), path.join(project, 'b', 'same.py'));
     for (const line of [0, -1, 1.5, '3', Infinity, 2147483648]) await assert.rejects(service.open('only.py', path.join(project, 'only.py'), line));
     await assert.rejects(service.open('only.py', programs.pycharm, 3));
     await assert.rejects(service.open('readme.txt', path.join(project, 'readme.txt'), 3));
@@ -121,7 +128,55 @@ async function verify(): Promise<void> {
     await service.addRoot(outer);
     await service.removeRoot(outer);
     assert.equal(service.lookup('nested.py').length, 1);
-    await service.removeRoot(inner);
+    await service.removeRoot(inner + path.sep);
+    assert.equal(service.lookup('nested.py').length, 0);
+    await fs.mkdir(inner, { recursive: true });
+    await fs.writeFile(path.join(outer, 'keep.py'), 'k');
+    await fs.writeFile(path.join(inner, 'gone.py'), 'g');
+    await service.addRoot(inner);
+    await service.addRoot(outer);
+    await fs.unlink(path.join(inner, 'gone.py'));
+    await fs.writeFile(path.join(inner, 'fresh.py'), 'f');
+    await service.rebuildRoot(outer);
+    assert.equal(service.lookup('gone.py').length, 0, 'rebuilding a parent drops files deleted under a nested root');
+    assert.equal(service.lookup('fresh.py').length, 1);
+    assert.equal(service.lookup('keep.py').length, 1);
+    await fs.unlink(path.join(inner, 'fresh.py'));
+    await service.rebuildRoot(inner);
+    assert.equal(service.lookup('fresh.py').length, 0, 'rebuilding a nested root drops deleted files still covered by the parent');
+    assert.equal(service.lookup('keep.py').length, 1);
+    const outside = path.join(root, 'outside-secret');
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'secret.py'), 's');
+    await fs.symlink(outside, path.join(outer, 'linkdir'), 'dir');
+    await service.rebuildRoot(outer);
+    assert.equal(service.lookup('secret.py').length, 0, 'directory symlinks are not indexed');
+    if (process.platform !== 'win32') {
+      const caseDir = path.join(root, 'CaseDir');
+      await fs.mkdir(caseDir);
+      await fs.writeFile(path.join(caseDir, 'Case.py'), 'c');
+      await service.addRoot(caseDir);
+      await assert.rejects(service.removeRoot(path.join(root, 'casedir')), /未找到该索引目录/);
+      assert.equal(service.lookup('Case.py').length, 1);
+      await service.removeRoot(caseDir);
+    }
+    const persistRoot = path.join(root, 'persist-root');
+    const persistStore = path.join(root, 'persist.json');
+    await fs.mkdir(persistRoot);
+    await fs.writeFile(path.join(persistRoot, 'keep.py'), 'k');
+    const persistSvc = new SourceService(persistStore, async () => undefined);
+    await persistSvc.addRoot(persistRoot);
+    await fs.rm(persistStore);
+    await fs.mkdir(persistStore);
+    const extraPersist = path.join(root, 'persist-extra');
+    await fs.mkdir(extraPersist);
+    await fs.writeFile(path.join(extraPersist, 'new.py'), 'n');
+    await assert.rejects(persistSvc.addRoot(extraPersist), /旧索引已保留/);
+    assert.equal(persistSvc.lookup('new.py').length, 0);
+    assert.equal(persistSvc.state().roots.some((item) => item === extraPersist), false);
+    await fs.unlink(path.join(persistRoot, 'keep.py'));
+    await assert.rejects(persistSvc.rebuildRoot(persistRoot), /旧索引已保留/);
+    assert.equal(persistSvc.lookup('keep.py').length, 1, 'failed save keeps the previous index');
     assert.equal(patternMatches('Makefile', '/a/Makefile'), true);
     assert.equal(patternMatches('.bashrc', '/a/.bashrc'), true);
     assert.equal(patternMatches('Dockerfile', '/a/dockerfile'), true);
@@ -152,7 +207,7 @@ async function verify(): Promise<void> {
     const savedOpeners = await fetch(base + SourceConst.Openers, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ openers: [...openers, { id: 'rx', name: 'Regex', exe: programs[SourceIde.PyCharm], pattern: '^later' }] }) });
     assert.equal(savedOpeners.status, 200);
 
-    console.log('PASS: indexing, duplicate/unique/missing lookup, opener pattern/launch, invalid input, stale files, rollback, restart, HTTP origin/host/header boundary, configurable fields, short paths, per-root add/rebuild/remove, registry auto-fill, free-form openers');
+    console.log('PASS: indexing, path-suffix lookup, duplicate/unique/missing lookup, opener pattern/launch, invalid input, stale files, nested rebuild, symlink skip, save rollback, restart, HTTP origin/host/header boundary, configurable fields, short paths, per-root add/rebuild/remove, registry auto-fill, free-form openers');
   } finally {
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     await fs.rm(root, { recursive: true, force: true });

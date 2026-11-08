@@ -35,14 +35,31 @@ export function SourceProvider({ children }: { children: React.ReactNode }) {
   const [choice, setChoice] = useState<Choice | null>(null);
   const [message, setMessage] = useState('');
   const [openers, setOpeners] = useState<SourceOpener[]>([]);
-  const [overrideId, setOverrideId] = useState<string | null>(null);
+  const [overrideId, setOverrideId] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(SourceConst.OverrideKey); } catch { return null; }
+  });
+  const setOverride = (id: string | null) => {
+    setOverrideId(id);
+    try {
+      if (id) sessionStorage.setItem(SourceConst.OverrideKey, id);
+      else sessionStorage.removeItem(SourceConst.OverrideKey);
+    } catch { /* the in-memory choice still lasts until reload */ }
+  };
   useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 6000); return () => clearTimeout(timer); }, [message]);
   useEffect(() => {
     let cancelled = false;
-    SourceApi.state().then((data) => { if (!cancelled) setOpeners(data.openers); }).catch(() => undefined);
+    SourceApi.state().then((data) => {
+      if (cancelled) return;
+      setOpeners(data.openers);
+      setOverrideId((current) => {
+        if (current && data.openers.some((item) => item.id === current)) return current;
+        try { sessionStorage.removeItem(SourceConst.OverrideKey); } catch { /* ignore */ }
+        return null;
+      });
+    }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [revision]);
-  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), openers, overrideId, setOverrideId, columns, setColumns: (id, value) => {
+  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), openers, overrideId, setOverrideId: setOverride, columns, setColumns: (id, value) => {
     const next = { ...columns, [id]: value };
     setColumns(next);
     try { localStorage.setItem(SourceConst.ColumnsKey, JSON.stringify(next)); } catch { setMessage('列设置仅在本次会话有效：浏览器存储不可用'); }
@@ -69,7 +86,7 @@ export function SourceMenuItem({ log, format, field, light, onClose }: { log: Lo
   }, [active, valid, target.file, source.revision]);
   if (!active) return null;
   const single = matches?.length === 1 ? matches[0] : null;
-  const override = source.overrideId ? source.openers.find((item) => item.id === source.overrideId) : null;
+  const override = source.openers.find((item) => item.id === source.overrideId) || null;
   const ready = override ? !!override.exe : !!single?.ready;
   const openerName = override?.name || single?.openerName;
   const enabled = valid && !!matches?.length && (matches.length > 1 || ready) && !busy && !error;
@@ -81,7 +98,7 @@ export function SourceMenuItem({ log, format, field, light, onClose }: { log: Lo
       source.choose({ target, matches, x: rect.left, y: rect.top, light }); onClose();
     } else {
       setBusy(true);
-      try { source.notify((await SourceApi.open(target, matches[0].path, source.overrideId || undefined)).message); onClose(); }
+      try { source.notify((await SourceApi.open(target, matches[0].path, override?.id)).message); onClose(); }
       catch (e) { source.notify((e as Error).message); }
       finally { setBusy(false); }
     }
@@ -103,10 +120,10 @@ export function SourceChoices({ choice, onClose, notify }: { choice: Choice; onC
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); if (previous?.isConnected) previous.focus(); };
   }, [onClose]);
   const source = useSource();
-  const override = source.overrideId ? source.openers.find((item) => item.id === source.overrideId) : null;
+  const override = source.openers.find((item) => item.id === source.overrideId) || null;
   return createPortal(<div ref={ref} tabIndex={-1} role="dialog" aria-label="选择源码文件" style={{ left: Math.max(8, Math.min(choice.x, window.innerWidth - 528)), top: Math.max(8, Math.min(choice.y, window.innerHeight - 340)) }} className={`fixed z-[110] w-[520px] max-w-[calc(100vw-16px)] rounded-xl p-3 shadow-xl focus:outline-none ${choice.light ? 'bg-white text-slate-800' : 'bg-slate-900 text-slate-100'}`}><div className="mb-2 flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><FolderSearch size={16} />选择源码文件 · {choice.matches.length} 个匹配</span><button aria-label="关闭源码选择" onClick={onClose} className="rounded p-1 hover:bg-slate-500/20"><X size={16} /></button></div><p className="mb-2 text-xs">{choice.target.file} · 第 {choice.target.line} 行</p><div className="max-h-60 overflow-auto">{choice.matches.map((item, i) => {
     const ready = override ? !!override.exe : item.ready;
     const name = override?.name || item.openerName;
-    return <button key={item.path} disabled={busy || !ready} title={`${item.path}\n${name ? ready ? `使用 ${name} 打开第 ${choice.target.line} 行` : `请先配置 ${name}` : '没有匹配的打开程序'}`} onClick={async () => { setBusy(true); try { notify((await SourceApi.open(choice.target, item.path, source.overrideId || undefined)).message); onClose(); } catch (e) { notify((e as Error).message); } finally { setBusy(false); } }} className="block w-full rounded-md px-2 py-2 text-left hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"><span className="block break-all font-mono text-xs">{labels[i]}</span><span className="text-xs">{name || '未映射程序'}{!ready ? ' · 请先配置程序' : ''}</span></button>;
+    return <button key={item.path} disabled={busy || !ready} title={`${item.path}\n${name ? ready ? `使用 ${name} 打开第 ${choice.target.line} 行` : `请先配置 ${name}` : '没有匹配的打开程序'}`} onClick={async () => { setBusy(true); try { notify((await SourceApi.open(choice.target, item.path, override?.id)).message); onClose(); } catch (e) { notify((e as Error).message); } finally { setBusy(false); } }} className="block w-full rounded-md px-2 py-2 text-left hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"><span className="block break-all font-mono text-xs">{labels[i]}</span><span className="text-xs">{name || '未映射程序'}{!ready ? ' · 请先配置程序' : ''}</span></button>;
   })}</div></div>, document.body);
 }
