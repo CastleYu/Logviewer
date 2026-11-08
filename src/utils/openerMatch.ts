@@ -4,6 +4,28 @@ export function fileBasename(file: string): string {
   return file.replaceAll('\\', '/').split('/').pop() || '';
 }
 
+/** `*` and `?` are wildcards. `\ ^ $ ( ) [ ] { } |` select a regular expression. Dots and plus signs stay literal. */
+const regexMeta = /[\\^$()[\]{}|]/;
+const globMeta = /[*?]/;
+
+function globMatches(pattern: string, base: string): boolean {
+  let source = '^';
+  for (const char of pattern) {
+    if (char === '*') source += '.*';
+    else if (char === '?') source += '.';
+    else source += char.replace(/[\\^$*+?.()|[\]{}]/g, '\\$&');
+  }
+  return new RegExp(`${source}$`, 'i').test(base);
+}
+
+function literalMatches(part: string, base: string, ext: string): boolean {
+  const token = part.toLowerCase();
+  const name = base.toLowerCase();
+  if (/^\w+$/.test(part)) return ext === `.${token}` || name === token;
+  if (part.startsWith('.')) return name === token || name.endsWith(token);
+  return name === token;
+}
+
 export function patternMatches(pattern: string, file: string): boolean {
   const base = fileBasename(file);
   const ext = (() => {
@@ -12,9 +34,8 @@ export function patternMatches(pattern: string, file: string): boolean {
   })();
   const parts = pattern.split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
   for (const part of parts) {
-    if (/^\.?\w+$/.test(part)) {
-      const want = part.startsWith('.') ? part.toLowerCase() : `.${part.toLowerCase()}`;
-      if (ext === want || base.toLowerCase() === part.toLowerCase()) return true;
+    if (!regexMeta.test(part)) {
+      if (globMeta.test(part) ? globMatches(part, base) : literalMatches(part, base, ext)) return true;
       continue;
     }
     try {

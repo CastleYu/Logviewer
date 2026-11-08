@@ -24,7 +24,7 @@ function valueText(value: unknown): string {
 }
 
 function FrameSourceLink({ log, frame, format, columns, light }: { log: LogEntry; frame: StackFrame; format: LogFormatConfig; columns: SourceColumns; light: boolean }) {
-  if (!frame.file || frame.line === undefined) return null;
+  if (!frame.file || frame.line === undefined || !columns.file) return null;
   const frameLog = { ...log, fields: { ...log.fields, [columns.file]: frame.file, [columns.line]: String(frame.line) } };
   return <div className="mt-1 inline-flex rounded border border-line align-middle"><SourceMenuItem log={frameLog} format={format} field={columns.file} light={light} onClose={() => undefined} /></div>;
 }

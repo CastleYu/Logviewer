@@ -68,7 +68,7 @@ export const SourceOpenerItem: React.FC<SourceOpenerItemProps> = ({ item, detect
           aria-label={`${item.name || '打开程序'} 后缀或正则`}
           value={item.pattern}
           disabled={busy}
-          placeholder=".py, .java  或  Controller$|Test.*\.cs"
+          placeholder=".py, *.java, Makefile  或  Controller$|Test.*\.cs"
           onChange={(event) => onChange({ ...item, pattern: event.target.value })}
           className={`${field} mt-1 font-mono`}
         />

@@ -91,10 +91,12 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
     } finally { setBusy(false); }
   };
 
+  const openerDraft = !!state && JSON.stringify(openers) !== JSON.stringify(state.openers);
+
   const addRoot = (pathValue: string) => {
     const path = pathValue.trim();
     if (!path || !state) return;
-    void run(() => SourceApi.addRoot(path), '已添加并建立索引').then((ok) => { if (ok) setDraft(''); });
+    void run(() => SourceApi.addRoot(path), '已添加并建立索引', openerDraft).then((ok) => { if (ok) setDraft(''); });
   };
 
   const persistOpeners = (next: SourceOpener[], message?: string) => {
@@ -163,7 +165,7 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
                   </button>
                 </div>
               </div>
-              <p className={`text-[11px] ${light ? 'text-slate-500' : 'text-slate-400'}`}>每项选择启动程序，并填写后缀（如 .py,.java）或文件名正则。启动时按列表顺序取第一项匹配。</p>
+              <p className={`text-[11px] ${light ? 'text-slate-500' : 'text-slate-400'}`}>{`每项选择启动程序，并填写后缀（如 .py、*.java）或完整文件名。* 和 ? 是通配符；^ $ ( ) [ ] { } | \\ 按正则。启动时按列表顺序取第一项匹配。`}</p>
               {openers.length === 0 ? (
                 <p className={`rounded-lg border border-dashed px-3 py-5 text-center text-xs ${light ? 'border-slate-200 text-slate-500' : 'border-slate-800 text-slate-400'}`}>尚未配置打开程序，可添加空白条目或使用下方探测结果</p>
               ) : (
@@ -205,8 +207,7 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
                   disabled={busy || rootsInfo.length === 0}
                   aria-label="重建全部索引"
                   onClick={() => {
-                    const dirty = JSON.stringify(openers) !== JSON.stringify(state.openers);
-                    void run(() => SourceApi.rebuild({ roots: state.roots }), (next) => `已重建全部索引：${next.count} 个文件`, dirty);
+                    void run(() => SourceApi.rebuild({ roots: state.roots }), (next) => `已重建全部索引：${next.count} 个文件`, openerDraft);
                   }}
                   className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
                 >
@@ -224,8 +225,8 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
                       item={item}
                       busy={busy}
                       light={light}
-                      onRebuild={(path) => void run(() => SourceApi.rebuildRoot(path), `已重建 ${path}`)}
-                      onRemove={(path) => void run(() => SourceApi.removeRoot(path), '已移除索引目录')}
+                      onRebuild={(path) => void run(() => SourceApi.rebuildRoot(path), `已重建 ${path}`, openerDraft)}
+                      onRemove={(path) => void run(() => SourceApi.removeRoot(path), '已移除索引目录', openerDraft)}
                     />
                   ))}
                 </ul>

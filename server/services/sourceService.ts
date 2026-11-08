@@ -35,8 +35,11 @@ export class SourceService {
     }
     await this.applyDetectedOpeners();
     if (this.config.roots.length) {
-      try { await this.rebuild(this.config, false); }
+      // Saved opener paths are not part of the index. A missing IDE must not leave the file map empty.
+      try { await this.rebuild({ roots: this.config.roots }, false); }
       catch (error) { this.error = error instanceof SourceError ? error.message : '无法读取源码配置，请重新保存目录和程序路径'; }
+    } else if (!this.error) {
+      this.error = await this.openerWarning(this.config);
     }
   }
 
@@ -85,7 +88,7 @@ export class SourceService {
     return { id: item.id.trim(), name, exe: item.exe, pattern: item.pattern };
   }
 
-  private async validate(input: unknown): Promise<SourceConfig> {
+  private async validate(input: unknown, checkOpenerFiles = true): Promise<SourceConfig> {
     const value = input as Partial<SourceConfig> & { programs?: unknown };
     if (!value || !Array.isArray(value.roots) || value.roots.length > SourceConst.MaxRoots) throw new SourceError('目录和打开程序配置无效');
     const roots: string[] = [];
@@ -105,7 +108,7 @@ export class SourceService {
       if (seen.has(opener.id)) throw new SourceError('打开程序编号重复');
       seen.add(opener.id);
       if (opener.pattern.length > 300) throw new SourceError('后缀或正则过长');
-      if (opener.exe) {
+      if (opener.exe && checkOpenerFiles) {
         if (!path.isAbsolute(opener.exe)) throw new SourceError('启动程序必须是绝对路径');
         if (!(await fs.stat(opener.exe).catch(() => null))?.isFile()) throw new SourceError(`启动程序不存在：${opener.exe}`);
       }
@@ -116,7 +119,8 @@ export class SourceService {
 
   async rebuild(input: unknown = this.config, persist = true): Promise<SourceState> {
     return this.locked(async () => {
-      const config = await this.validate(input);
+      const explicitOpeners = !!input && typeof input === 'object' && Array.isArray((input as { openers?: unknown }).openers);
+      const config = await this.validate(input, explicitOpeners);
       const index = await this.scanRoots(config.roots, 0);
       await this.commit(config, persist);
       this.index = index;
@@ -291,7 +295,16 @@ export class SourceService {
     if (persist) await this.persist(config);
     this.config = config;
     this.updated = new Date().toISOString();
-    this.error = '';
+    this.error = await this.openerWarning(config);
+  }
+
+  private async openerWarning(config: SourceConfig): Promise<string> {
+    for (const opener of config.openers) {
+      if (!opener.exe) continue;
+      if (!path.isAbsolute(opener.exe)) return '启动程序必须是绝对路径';
+      if (!(await fs.stat(opener.exe).catch(() => null))?.isFile()) return `启动程序不存在：${opener.exe}`;
+    }
+    return '';
   }
 
   private async persist(config: SourceConfig): Promise<void> {

@@ -181,6 +181,17 @@ async function verify(): Promise<void> {
     assert.equal(patternMatches('.bashrc', '/a/.bashrc'), true);
     assert.equal(patternMatches('Dockerfile', '/a/dockerfile'), true);
     assert.equal(patternMatches('Makefile', '/a/other.mk'), false);
+    assert.equal(patternMatches('test.py', '/a/test.py'), true);
+    assert.equal(patternMatches('test.py', '/a/testXpy'), false, 'a dotted filename is literal, not an unanchored regex');
+    assert.equal(patternMatches('docker-compose.yml', '/a/docker-compose.yml'), true);
+    assert.equal(patternMatches('docker-compose.yml', '/a/docker-composeXyml'), false);
+    assert.equal(patternMatches('.spec.ts', '/a/foo.spec.ts'), true);
+    assert.equal(patternMatches('.spec.ts', '/a/XspecYts'), false);
+    assert.equal(patternMatches('.c++', '/a/foo.c++'), true);
+    assert.equal(patternMatches('*.py', '/src/a.py'), true);
+    assert.equal(patternMatches('*.py', '/src/a.pyx'), false);
+    assert.equal(patternMatches('*.py, *.java', '/src/A.java'), true);
+    assert.equal(patternMatches('Test.*\\.cs', '/src/UserTest.Foo.cs'), true);
 
     const detectedExe = path.join(root, SourceConst.Exe[SourceIde.PyCharm]);
     const detectStore = path.join(root, 'detect.json');
@@ -194,6 +205,23 @@ async function verify(): Promise<void> {
     const kept = new SourceService(keepStore, async () => undefined, async () => [{ id: SourceIde.PyCharm, name: 'PyCharm', exe: path.join(root, 'other', SourceConst.Exe[SourceIde.PyCharm]), pattern: '.py' }]);
     await kept.init();
     assert.equal(kept.state().openers.find((item) => item.id === SourceIde.PyCharm)?.exe, programs.pycharm);
+    const missingExeRoot = path.join(root, 'missing-exe');
+    await fs.mkdir(missingExeRoot);
+    await fs.writeFile(path.join(missingExeRoot, 'kept.py'), 'k');
+    const missingExe = path.join(root, 'no-such-ide.exe');
+    const missingExeStore = path.join(root, 'missing-exe.json');
+    await fs.writeFile(missingExeStore, JSON.stringify({ roots: [missingExeRoot], openers: [{ id: 'gone', name: 'Gone', exe: missingExe, pattern: '.py' }] }));
+    const missingExeSvc = new SourceService(missingExeStore, async () => undefined, async () => []);
+    await missingExeSvc.init();
+    assert.equal(missingExeSvc.lookup('kept.py').length, 1, 'a missing opener executable does not block the index');
+    assert.match(missingExeSvc.state().error || '', /启动程序不存在/);
+    await assert.rejects(missingExeSvc.saveOpeners(missingExeSvc.state().openers), /启动程序不存在/);
+    assert.equal(missingExeSvc.lookup('kept.py').length, 1);
+    const rebuiltMissing = await missingExeSvc.rebuild({ roots: missingExeSvc.state().roots });
+    assert.equal(rebuiltMissing.count, 1);
+    assert.match(rebuiltMissing.error || '', /启动程序不存在/);
+    await assert.rejects(missingExeSvc.rebuild({ roots: [missingExeRoot], openers: missingExeSvc.state().openers }), /启动程序不存在/);
+    assert.equal(missingExeSvc.lookup('kept.py').length, 1, 'rejecting a bad opener keeps the current index');
 
     const parsed = parseRegSzPaths('    (Default)    REG_SZ    D:\\Code\\ide\\JetBrains\\PyCharm\\PyCharm 2025.3.3\nInstallLocation    REG_SZ    D:\\Code\\ide\\JetBrains\\IDEA\n');
     assert.ok(parsed.some((item) => item.includes('PyCharm')));
