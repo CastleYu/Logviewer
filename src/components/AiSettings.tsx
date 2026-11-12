@@ -42,6 +42,10 @@ export function AiSettings({ theme, open, onClose, onSaved }: { theme: ThemeMode
       </label>
       <label className="block text-xs font-semibold">环境变量白名单<input aria-label="环境变量白名单" value={draft.envAllow.join(', ')} onChange={(event) => patch({ envAllow: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} className={field} /></label>
       <label className="block text-xs font-semibold">终端恢复命令<input aria-label="终端恢复命令" value={draft.resume} onChange={(event) => patch({ resume: event.target.value })} className={field} /></label>
+      <label className="block text-xs font-semibold">自动允许的类型<input aria-label="自动允许的类型" value={draft.allow.join(', ')} onChange={(event) => patch({ allow: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} className={field} /></label>
+      <label className="block text-xs font-semibold">自动拒绝的类型<input aria-label="自动拒绝的类型" value={draft.deny.join(', ')} onChange={(event) => patch({ deny: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} className={field} /></label>
+      <label className="flex items-center gap-2 text-xs"><input aria-label="安装诊断 Agent" type="checkbox" checked={draft.installRecipe} onChange={(event) => patch({ installRecipe: event.target.checked })} />把 RCA 诊断 Agent 安装到工作区的 .opencode/agents</label>
+      <label className="flex items-center gap-2 text-xs"><input aria-label="在代码仓保存日志快照" type="checkbox" checked={draft.trackLog} onChange={(event) => patch({ trackLog: event.target.checked })} />在代码仓保存日志快照</label>
       <div className="flex flex-wrap gap-2">
         <button type="button" className="lv-btn h-8 px-3" disabled={busy} onClick={() => void save()}>保存</button>
         <button type="button" className="lv-btn h-8 px-3" disabled={busy} onClick={() => void test()}>测试连接</button>

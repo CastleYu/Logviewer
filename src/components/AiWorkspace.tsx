@@ -28,7 +28,16 @@ function openFile(file: string, line: number): void {
 }
 
 function follow(event: MouseEvent, jump?: (line: number) => void): void {
-  const node = (event.target as HTMLElement).closest('a');
+  const target = event.target as HTMLElement;
+  const link = target.closest('[data-streamdown="link"]');
+  if (link) {
+    const label = (link.textContent || '').trim();
+    const line = label.match(/^(?:L|第\s*|源行\s*)(\d+)\s*行?$/);
+    if (line) { event.preventDefault(); event.stopPropagation(); jump?.(Number(line[1])); return; }
+    const file = label.match(/^(.+):(\d+)$/);
+    if (file) { event.preventDefault(); event.stopPropagation(); openFile(file[1], Number(file[2])); return; }
+  }
+  const node = target.closest('a');
   if (!node) return;
   const href = node.getAttribute('href') || '';
   if (href.startsWith('#line-')) { event.preventDefault(); jump?.(Number(href.slice(6))); return; }
@@ -51,7 +60,7 @@ function LineText({ text, jump }: { text: string; jump?: (line: number) => void 
 
 function PartView({ part, jump, onUndo, onAllow }: { key?: string | number; part: AiPart; jump?: (line: number) => void; onUndo: (id: string) => void; onAllow: (id: string) => void }) {
   if (part.t === AiPartKind.User) return <LineText text={part.text} jump={jump} />;
-  if (part.t === AiPartKind.Text) return <div onClick={(event) => follow(event, jump)}><Streamdown mode="static" plugins={{ code }} linkSafety={{ enabled: true }}>{linkText(part.text)}</Streamdown></div>;
+  if (part.t === AiPartKind.Text) return <div onClickCapture={(event) => follow(event, jump)}><Streamdown mode="static" plugins={{ code }} linkSafety={{ enabled: true }}>{linkText(part.text)}</Streamdown></div>;
   if (part.t === AiPartKind.Thought) return <details className="rounded-md border border-line bg-sunken px-2 py-1 text-xs text-ink-2"><summary>思考</summary><p className="mt-1 whitespace-pre-wrap">{part.text}</p></details>;
   if (part.t === AiPartKind.Tool) return <details className="rounded-md border border-line bg-raised px-2 py-1 text-xs" open={part.status === AiToolStatus.Fail}><summary className="cursor-pointer">{part.name} · {part.status}</summary><p className="mt-1 text-ink-3">{part.args}</p><div className="mt-1"><LineText text={part.result} jump={jump} /></div></details>;
   if (part.t === AiPartKind.Plan) return <ul className="space-y-1 rounded-md border border-line px-2 py-1 text-xs">{part.items.map((item, index) => <li key={index}>{item.status || '·'} {item.text}</li>)}</ul>;
@@ -83,12 +92,14 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [notes, setNotes] = useState<AiNote[]>([]);
+  const [noteId, setNoteId] = useState('');
   const [noteName, setNoteName] = useState('');
   const [noteText, setNoteText] = useState('');
   const [repository, setRepository] = useState<AiRepositoryState | null>(null);
   const [menu, setMenu] = useState<{ kind: 'session' | 'model' | 'mode' | 'more' | 'slash'; rect: DOMRect } | null>(null);
   const [deferred, setDeferred] = useState<AiWorkspaceRequest[]>([]);
   const seen = useRef(0);
+  const refreshed = useRef(new Set<string>());
   const logRef = useRef(log?.id);
   logRef.current = log?.id;
   const box = useRef<HTMLDivElement>(null);
@@ -125,8 +136,19 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
     };
     return () => { live = false; source.close(); };
   }, []);
-  useEffect(() => { setSelected(null); setDraft(''); setChip(true); setError(''); }, [log?.id]);
+  useEffect(() => { setSelected(null); setDraft(''); setChip(true); setError(''); refreshed.current.clear(); }, [log?.id]);
   useEffect(() => { const node = box.current; if (node) node.scrollTop = node.scrollHeight; }, [current?.messages, current?.state, open]);
+  useEffect(() => {
+    if (sessions.some((item) => item.state === AiSessionState.Busy)) setLink(AiLink.Work);
+    else if (sessions.some((item) => item.state === AiSessionState.Error || item.link === AiLink.Fail)) setLink(AiLink.Fail);
+    else if (sessions.some((item) => item.agentId)) setLink(AiLink.Ready);
+  }, [sessions]);
+  useEffect(() => {
+    const item = current;
+    if (!item || item.legacy || item.closed || !item.agentId || item.loaded !== false || refreshed.current.has(item.id)) return;
+    refreshed.current.add(item.id);
+    AiApi.refresh(item.id).then(put).catch((cause) => setError((cause as Error).message));
+  }, [current?.id, current?.loaded]);
   useEffect(() => {
     if (!open || !log || config.mode === AiMode.Isolated) { setRepository(null); return; }
     let live = true;
@@ -151,14 +173,15 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
   const ensure = async (fresh = false): Promise<AiSession> => {
     if (!fresh && current && !current.closed) return current;
     if (!log) throw new Error('请先打开日志');
-    const sourceMode = (config.mode || AiMode.Source) === AiMode.Source;
+    let sourceMode = (config.mode || AiMode.Source) === AiMode.Source;
     let repositoryPath = log.repository || repository?.repository;
     if (sourceMode && !repositoryPath) {
       const resolved = await AiApi.repository({ logId: log.id, targets: sourceTargets, repository: log.repository });
       repositoryPath = resolved.repository || (resolved.candidates.length === 1 ? resolved.candidates[0].repository : undefined);
       setRepository(resolved.repository ? { ...resolved, repository: repositoryPath, origin: resolved.origin } : resolved);
-      if (!repositoryPath) throw new Error(resolved.candidates.length > 1 ? '检测到多个源码仓库，请先选择一个。' : '未找到源码仓库。');
-      if (!log.repository) onRepository?.(repositoryPath);
+      if (!repositoryPath && resolved.candidates.length > 1) throw new Error('检测到多个源码仓库，请先选择一个。');
+      if (!repositoryPath) { sourceMode = false; setNotice('未找到源码仓库，已使用隔离日志工作区'); }
+      if (repositoryPath && !log.repository) onRepository?.(repositoryPath);
     }
     const session = await AiApi.create({ logId: log.id, mode: sourceMode ? AiMode.Source : AiMode.Isolated, repository: sourceMode ? repositoryPath : undefined, targets: sourceMode ? sourceTargets : undefined, installRecipe: config.installRecipe, trackLog: config.trackLog });
     put(session);
@@ -208,6 +231,16 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
     void act(() => AiApi.order(current.id, ids));
   };
   const openMenu = (kind: NonNullable<typeof menu>['kind'], event: MouseEvent<HTMLButtonElement>) => setMenu({ kind, rect: event.currentTarget.getBoundingClientRect() });
+  const writeNote = async () => {
+    if (!log || !noteText.trim()) return;
+    try {
+      const saved = await AiApi.saveNote(log.id, noteName || '笔记', noteText, noteId || undefined);
+      setNotes((rows) => noteId ? rows.map((row) => row.id === saved.id ? saved : row) : [saved, ...rows]);
+      setNoteId('');
+      setNoteName('');
+      setNoteText('');
+    } catch (cause) { setError((cause as Error).message); }
+  };
   const empty = !current?.messages.length;
   const suggestions = [
     { label: '概览这份日志', text: '概览这份日志' },
@@ -237,26 +270,26 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
         </div>
         {repository && !repository.repository && repository.candidates.length > 1 ? <div className="shrink-0 space-y-1 px-2 py-1">{repository.candidates.map((item) => <button key={item.repository} type="button" className="lv-btn h-7 w-full justify-start px-2 text-[11px]" onClick={() => void AiApi.repository({ logId: log!.id, repository: item.repository, targets: sourceTargets }).then((value) => { setRepository(value); if (value.repository) onRepository?.(value.repository); })}>{item.repository}</button>)}</div> : null}
         {tab === 'notes' ? <div className="min-h-0 flex-1 space-y-2 overflow-auto p-2">
-          {notes.map((item) => <article key={item.id} className="rounded-md border border-line p-2 text-xs"><header className="flex items-center gap-2"><strong className="min-w-0 flex-1 truncate">{item.name || item.kind}</strong><button type="button" className="text-danger" onClick={() => void AiApi.undo(item.id).then(() => setNotes((rows) => rows.filter((row) => row.id !== item.id)))}>删除</button></header><pre className="mt-1 whitespace-pre-wrap text-ink-2">{item.text}</pre></article>)}
+          {notes.map((item) => <article key={item.id} className="rounded-md border border-line p-2 text-xs"><header className="flex items-center gap-2"><strong className="min-w-0 flex-1 truncate">{item.name || item.kind}</strong><button type="button" className="text-accent-ink" onClick={() => { setNoteId(item.id); setNoteName(item.name); setNoteText(item.text); }}>编辑</button><button type="button" className="text-danger" onClick={() => void AiApi.undo(item.id).then(() => { setNotes((rows) => rows.filter((row) => row.id !== item.id)); if (noteId === item.id) { setNoteId(''); setNoteName(''); setNoteText(''); } })}>删除</button></header><pre className="mt-1 whitespace-pre-wrap text-ink-2">{item.text}</pre></article>)}
           {!notes.length ? <p className="text-xs text-ink-3">还没有笔记</p> : null}
           <input aria-label="笔记标题" value={noteName} onChange={(event) => setNoteName(event.target.value)} placeholder="标题" className="h-8 w-full rounded-md border border-line bg-sunken px-2 text-xs" />
           <textarea aria-label="笔记正文" value={noteText} onChange={(event) => setNoteText(event.target.value)} className="h-24 w-full rounded-md border border-line bg-sunken p-2 text-xs" />
-          <div className="flex gap-2"><button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !noteText.trim()} onClick={() => void AiApi.saveNote(log!.id, noteName || '笔记', noteText).then((item) => { setNotes((rows) => [item, ...rows]); setNoteText(''); })}>保存笔记</button><button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!notes.length} onClick={() => { const blob = new Blob([notes.map((item) => `# ${item.name}\n\n${item.text}`).join('\n\n')], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'notes.md'; link.click(); URL.revokeObjectURL(url); }}>导出</button></div>
+          <div className="flex gap-2"><button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !noteText.trim()} onClick={() => void writeNote()}>{noteId ? '保存修改' : '保存笔记'}</button>{noteId ? <button type="button" className="lv-btn h-7 px-2 text-[11px]" onClick={() => { setNoteId(''); setNoteName(''); setNoteText(''); }}>取消</button> : null}<button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!notes.length} onClick={() => { const blob = new Blob([notes.map((item) => `# ${item.name}\n\n${item.text}`).join('\n\n')], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'notes.md'; link.click(); URL.revokeObjectURL(url); }}>导出</button></div>
         </div> : <div ref={box} className="min-h-0 flex-1 space-y-2 overflow-auto p-2" role="log">
           {empty ? <div className="grid grid-cols-2 gap-2">{suggestions.map((item) => <button key={item.label} type="button" disabled={!log || item.off} className="rounded-lg border border-line bg-raised px-2 py-3 text-left text-xs hover:border-line-strong disabled:opacity-40" onClick={() => void send(item.text)}>{item.label}</button>)}</div> : current?.messages.map((msg) => <Message key={msg.id} msg={msg} jump={onJump} onUndo={(id) => void AiApi.undo(id)} onAllow={(id) => current && void act(() => AiApi.allow(current.id, id))} />)}
           {current?.queuePaused ? <p className="text-[11px] text-warn">队列已暂停</p> : null}
         </div>}
         {tab === 'chat' ? <div className="shrink-0 space-y-1 border-t border-line p-2">
-          {current?.queue.length ? <ol className="max-h-24 space-y-1 overflow-auto text-[11px]">{current.queue.map((item, index) => <li key={item.id} className="flex items-center gap-1"><span className="min-w-0 flex-1 truncate">{index + 1}. {item.text}</span><button type="button" aria-label="上移" onClick={() => move(index, -1)}>↑</button><button type="button" aria-label="下移" onClick={() => move(index, 1)}>↓</button><button type="button" aria-label="移除" onClick={() => void act(() => AiApi.drop(current.id, item.id))}><X className="h-3 w-3" /></button></li>)}</ol> : null}
+          {current?.queue.length ? <ol className="max-h-24 space-y-1 overflow-auto text-[11px]">{current.queue.map((item, index) => <li key={item.id} className="flex items-center gap-1"><span className="min-w-0 flex-1 truncate">{index + 1}. {item.text}</span><Tooltip text="上移"><button type="button" aria-label="上移" onClick={() => move(index, -1)}>↑</button></Tooltip><Tooltip text="下移"><button type="button" aria-label="下移" onClick={() => move(index, 1)}>↓</button></Tooltip><Tooltip text="移出队列"><button type="button" aria-label="移除" onClick={() => void act(() => AiApi.drop(current.id, item.id))}><X className="h-3 w-3" /></button></Tooltip></li>)}</ol> : null}
           {chip && chipText ? <button type="button" className="inline-flex max-w-full items-center gap-1 rounded-full bg-raised px-2 py-0.5 text-[10px] text-ink-2" onClick={() => setChip(false)}>📎 {chipText} <X className="h-3 w-3" /></button> : null}
           {error ? <p role="alert" className="text-[11px] text-danger">{error}</p> : null}
           {notice ? <p role="status" className="text-[11px] text-ink-3">{notice}</p> : null}
           <div className="flex items-end gap-1">
             <textarea aria-label="向 AI 提问" value={draft} disabled={!!current?.legacy} onChange={(event) => { setDraft(event.target.value); if (event.target.value.startsWith('/') && !event.target.value.includes(' ')) setMenu({ kind: 'slash', rect: event.target.getBoundingClientRect() }); else if (menu?.kind === 'slash') setMenu(null); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(draft); } }} placeholder={current?.legacy ? '旧版会话只读' : '提问，或输入 /'} className="h-16 min-w-0 flex-1 resize-none rounded-md border border-line bg-sunken p-2 text-xs outline-none" />
             <div className="flex flex-col gap-1">
-              {busy ? <button type="button" className="lv-btn lv-btn-danger h-8 px-2" aria-label="停止" onClick={() => current && void act(() => AiApi.abort(current.id))}><Square className="h-3.5 w-3.5" />停止</button> : null}
-              {current?.queuePaused ? <button type="button" className="lv-btn h-8 px-2" onClick={() => current && void act(() => AiApi.resume(current.id))}>继续</button> : null}
-              <button type="button" className="lv-btn lv-btn-primary h-8 px-2" disabled={!draft.trim() || !!current?.legacy} onClick={() => void send(draft)}><Send className="h-3.5 w-3.5" />{busy ? '排队' : '发送'}</button>
+              {busy ? <Tooltip text="停止当前轮"><button type="button" className="lv-btn lv-btn-danger h-8 px-2" aria-label="停止" onClick={() => current && void act(() => AiApi.abort(current.id))}><Square className="h-3.5 w-3.5" />停止</button></Tooltip> : null}
+              {current?.queuePaused ? <Tooltip text="继续发送队列"><button type="button" className="lv-btn h-8 px-2" onClick={() => current && void act(() => AiApi.resume(current.id))}>继续</button></Tooltip> : null}
+              <Tooltip text={busy ? '加入队列，本轮结束后发送' : '发送消息'}><button type="button" className="lv-btn lv-btn-primary h-8 px-2" disabled={!draft.trim() || !!current?.legacy} onClick={() => void send(draft)}><Send className="h-3.5 w-3.5" />{busy ? '排队' : '发送'}</button></Tooltip>
             </div>
           </div>
           {steering && busy ? <label className="flex items-center gap-1 text-[11px] text-ink-2"><input type="checkbox" checked={steer} onChange={(event) => setSteer(event.target.checked)} />插入到当前轮</label> : null}
