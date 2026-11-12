@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Braces, ChevronDown, FileText, FlaskConical, FolderOpen, HardDrive, History, Layers3, Moon, ScrollText, Sun, Upload, X } from 'lucide-react';
+import { Tooltip } from './Tooltip';
 import { SourceSettings } from './SourceSettings';
 import { SourceOpenerSwitch } from './SourceOpenerSwitch';
 import { LogStats, ThemeMode } from '../types';
@@ -102,7 +103,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <SourceOpenerSwitch files={sourceFiles} light={light} />
         </div>
         <span className="mx-1 hidden h-5 w-px bg-line xl:block" />
-        <button type="button" onClick={onOpenAi} aria-pressed={aiOpen} className={`lv-btn h-[30px] px-2 ${aiOpen ? '!border-accent/40 !bg-accent-soft !text-accent-ink' : ''}`} title="AI 工作区"><Bot className="h-4 w-4" /><span className="hidden lg:inline">AI</span></button>
+        <Tooltip text="AI 工作区"><button type="button" onClick={onOpenAi} aria-pressed={aiOpen} aria-label="AI 工作区" className={`lv-btn h-[30px] px-2 ${aiOpen ? '!border-accent/40 !bg-accent-soft !text-accent-ink' : ''}`}><Bot className="h-4 w-4" /><span className="hidden lg:inline">AI</span></button></Tooltip>
         <button type="button" onClick={onOpenHistory} className="lv-icon-btn h-[30px] w-[30px]" aria-label="历史日志" title="历史日志"><History className="h-4 w-4" /></button>
         <button type="button" onClick={onOpenRemote} className="lv-btn h-[30px]" title="远程工作台：浏览服务器目录、执行命令、打开日志">
           <HardDrive className="h-3.5 w-3.5 text-accent" /><span className="hidden sm:inline">远程</span>

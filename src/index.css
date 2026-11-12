@@ -63,24 +63,24 @@
 }
 
 .dark {
-  --color-canvas: #0e1014;
-  --color-surface: #15181d;
-  --color-raised: #1a1d23;
-  --color-sunken: #101216;
-  --color-line: #262a32;
-  --color-line-strong: #343944;
-  --color-ink: #e8eaef;
-  --color-ink-2: #aab0bb;
-  --color-ink-3: #737a86;
-  --color-accent: #6f87f0;
+  --color-canvas: #0f1115;
+  --color-surface: #171a20;
+  --color-raised: #1e222a;
+  --color-sunken: #12151a;
+  --color-line: #2a2f38;
+  --color-line-strong: #3a404b;
+  --color-ink: #e6e8ec;
+  --color-ink-2: #b3b9c4;
+  --color-ink-3: #848b97;
+  --color-accent: #7d93f2;
   --color-accent-hover: #8599f4;
-  --color-accent-soft: #1c2440;
-  --color-accent-ink: #a9b8f7;
+  --color-accent-soft: #212a48;
+  --color-accent-ink: #b4c1f8;
   --color-danger: #f0677a;
   --color-danger-soft: #3a1820;
-  --color-ok: #3ec98d;
+  --color-ok: #45c58f;
   --color-ok-soft: #12291f;
-  --color-warn: #f0aa4f;
+  --color-warn: #e3a446;
   --color-warn-soft: #2f2210;
   --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 36px -8px rgb(0 0 0 / 0.6);
   --shadow-window: 0 2px 8px rgb(0 0 0 / 0.45), 0 30px 70px -16px rgb(0 0 0 / 0.75);

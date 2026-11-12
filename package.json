@@ -12,6 +12,7 @@
     "verify:sftp-browse": "tsx scripts/verify-sftp-browse.ts",
     "verify:listen": "tsx scripts/verify-listen-backoff.ts",
     "verify:source": "tsx scripts/verify-source.ts",
+    "verify:acp": "tsx scripts/verify-acp.ts",
     "verify:source-repository": "tsx scripts/verify-source-repository.ts",
     "verify:ai-source": "tsx scripts/verify-ai-source.ts",
     "verify:remote": "tsx scripts/verify-remote-session.ts",

@@ -33,7 +33,7 @@ import { csvLogs, jsonLogs } from './utils/logExport';
 import { HistoryApi } from './services/historyApi';
 import { HistoryKind, type HistoryLog } from './config/historyTypes';
 import { AiWorkspace, type AiWorkspaceRequest } from './components/AiWorkspace';
-import { AiConst } from './config/aiTypes';
+import { AiConst, type AiView } from './config/aiTypes';
 import { LocalFileDialog } from './components/LocalFileDialog';
 import { InvestigationViewDialog } from './components/InvestigationViewDialog';
 import {
@@ -113,7 +113,8 @@ export default function App() {
     if (!historyLog) { setHistoryError('日志快照尚未保存，请稍后重试分析。'); return; }
     const lines = rows.map((row) => row.lineNumber);
     const sourceScope = lines.length > 8 ? `${lines[0]}–${lines[lines.length - 1]}` : lines.join('、');
-    setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, scope: `选中 ${rows.length.toLocaleString()} 条 · 源行 ${sourceScope}`, text: rows.map((row) => `[日志行 ${row.lineNumber}]\n${row.rawText}`).join('\n\n') });
+    setAiOpen(true);
+    setAiRequest({ logId: historyLog.id, nonce: Date.now(), title: `分析选中的 ${rows.length} 条日志`, scope: `选中 ${rows.length.toLocaleString()} 条 · 源行 ${sourceScope}`, text: `请用 log_selection 分析当前选中的 ${rows.length} 行（源行 ${sourceScope}），不要假设你已经看到原文。` });
   }, [historyLog?.id]);
 
   const remember = useCallback((loaded: LoadedSource, kind: HistoryKind, origin: string, formatId: string, existing?: HistoryLog) => {
@@ -834,6 +835,12 @@ export default function App() {
     return searchMatchLogIds[idx];
   }, [searchMatchLogIds, currentMatchIndex]);
   const selectedLogs = useMemo(() => filteredLogs.filter((log) => selectedIds.has(log.id)), [filteredLogs, selectedIds]);
+  const aiView = useCallback((): AiView => {
+    const picked = filteredLogs.filter((item) => selectedIds.has(item.id)).map((item) => item.lineNumber);
+    const start = filteredLogs[firstVisibleIndexRef.current];
+    const end = filteredLogs[Math.min(filteredLogs.length - 1, firstVisibleIndexRef.current + 40)];
+    return { selected: picked, search: filter.searchKeyword || '', filter: filteredLogs.length === logs.length ? '' : `${filteredLogs.length} 条`, from: start?.lineNumber || 0, to: end?.lineNumber || 0, use: picked.length > 0 };
+  }, [filteredLogs, selectedIds, filter.searchKeyword, logs.length]);
   const stackLog = useMemo(() => stackId === null ? undefined : logs.find((log) => log.id === stackId), [logs, stackId]);
   const inspectedLog = stackLog || (inspectorOpen && selectedLogs.length === 1 ? selectedLogs[0] : undefined);
 
@@ -1148,7 +1155,7 @@ export default function App() {
         </div>
       )}
         </div>
-        <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} open={aiOpen} historyOpen={historyOpen} onOpenChange={setAiOpen} onHistoryOpenChange={setHistoryOpen} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} />
+        <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} open={aiOpen} historyOpen={historyOpen} onOpenChange={setAiOpen} onHistoryOpenChange={setHistoryOpen} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} onJump={handleJumpToLine} getView={aiView} />
       </div>
       <RemoteWorkbench
         visible={browseVisible}

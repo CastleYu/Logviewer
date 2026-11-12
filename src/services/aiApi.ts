@@ -1,22 +1,38 @@
-import { AiRoute, type AiConfig, type AiCreateInput, type AiPermission, type AiPromptInput, type AiQuestion, type AiSession, type AiState, type AiRepositoryInput, type AiRepositoryState } from '../config/aiTypes';
-import { AiUi } from '../config/aiUiTypes';
+import { AiConst, AiRoute, type AiConfig, type AiCreateInput, type AiNote, type AiProbe, type AiRepositoryInput, type AiRepositoryState, type AiSession, type AiState, type AiView } from '../config/aiTypes';
 
 export class AiApi {
-  static async request<T>(route: string, init?: RequestInit): Promise<T> { const response = await fetch(`/api/ai${route}`, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } }); const value = await response.json().catch(() => undefined); if (!response.ok) throw new Error(value?.message || 'AI 服务请求失败'); return value as T; }
-  static state(): Promise<AiState> { return this.request(AiRoute.State); }
-  static configure(input: Partial<AiConfig>): Promise<AiState['config']> { return this.request(AiRoute.Config, { method: 'PUT', body: JSON.stringify(input) }); }
-  static launch(): Promise<AiState & { connection: { managed: boolean; endpoint: string } }> { return this.request(AiRoute.Launch, { method: 'POST' }); }
-  static create(input: AiCreateInput): Promise<AiSession> { return this.request(AiRoute.Sessions, { method: 'POST', body: JSON.stringify(input) }); }
-  static repository(input: AiRepositoryInput): Promise<AiRepositoryState> { return this.request(AiRoute.Repository, { method: 'POST', body: JSON.stringify(input) }); }
-  static prompt(sessionId: string, input: Omit<AiPromptInput, 'sessionId'>): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiRoute.Prompt}`, { method: 'POST', body: JSON.stringify(input) }); }
-  static abort(sessionId: string): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiRoute.Abort}`, { method: 'POST' }); }
-  static refresh(sessionId: string): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiUi.Refresh}`, { method: 'POST' }); }
-  static resume(sessionId: string): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiUi.Queue}${AiUi.Resume}`, { method: 'POST' }); }
-  static drop(sessionId: string, itemId: string): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiUi.Queue}/${encodeURIComponent(itemId)}`, { method: 'DELETE' }); }
-  static terminal(sessionId: string): Promise<{ opened: boolean }> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}${AiUi.Terminal}`, { method: 'POST' }); }
-  static catalogs(sessionId: string): Promise<{ providers: unknown; agents: unknown }> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}/catalogs`); }
-  static permission(sessionId: string, requestId: string, body: unknown): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/reply`, { method: 'POST', body: JSON.stringify(body) }); }
-  static question(sessionId: string, requestId: string, body: unknown, reject = false): Promise<AiSession> { return this.request(`${AiRoute.Sessions}/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(requestId)}/${reject ? 'reject' : 'reply'}`, { method: 'POST', body: JSON.stringify(body) }); }
-}
+  static async send<T>(route: string, method = 'GET', body?: unknown): Promise<T> {
+    const response = await fetch(AiConst.Api + route, {
+      method,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error((data as { message?: string }).message || 'AI 请求失败');
+    return data as T;
+  }
 
-export type { AiConfig, AiPermission, AiQuestion, AiSession, AiState };
+  static state(): Promise<AiState> { return this.send(AiRoute.State); }
+  static saveConfig(config: Partial<AiConfig>): Promise<AiConfig> { return this.send(AiRoute.Config, 'PUT', config); }
+  static probe(command?: string): Promise<AiProbe> { return this.send(AiRoute.Probe, 'POST', { command }); }
+  static login(): Promise<{ opened: boolean; command: string }> { return this.send(AiRoute.Login, 'POST', {}); }
+  static create(input: AiCreateInput): Promise<AiSession> { return this.send(AiRoute.Sessions, 'POST', input); }
+  static remove(id: string): Promise<AiState> { return this.send(`${AiRoute.Sessions}/${id}`, 'DELETE'); }
+  static repository(input: AiRepositoryInput): Promise<AiRepositoryState> { return this.send(AiRoute.Repository, 'POST', input); }
+  static prompt(id: string, text: string, view?: AiView, steer?: boolean): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Prompt}`, 'POST', { text, view, steer }); }
+  static abort(id: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Abort}`, 'POST', {}); }
+  static resume(id: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Resume}`, 'POST', {}); }
+  static drop(id: string, itemId: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Queue}/${itemId}`, 'DELETE'); }
+  static order(id: string, ids: string[]): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Queue}`, 'PUT', { ids }); }
+  static view(id: string, view: AiView): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.View}`, 'POST', view); }
+  static terminal(id: string): Promise<{ opened: boolean; command: string }> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Terminal}`, 'POST', {}); }
+  static refresh(id: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Refresh}`, 'POST', {}); }
+  static close(id: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Close}`, 'POST', {}); }
+  static model(id: string, value: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Model}`, 'POST', { value }); }
+  static mode(id: string, value: string, optionId = 'mode'): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Mode}`, 'POST', { id: optionId, value }); }
+  static allow(id: string, permitId: string): Promise<AiSession> { return this.send(`${AiRoute.Sessions}/${id}${AiRoute.Permit}/${permitId}`, 'POST', {}); }
+  static notes(logId: string): Promise<AiNote[]> { return this.send(`${AiRoute.Notes}/${logId}`); }
+  static saveNote(logId: string, name: string, text: string, id?: string): Promise<AiNote> { return this.send(`${AiRoute.Notes}/${logId}`, 'PUT', { name, text, id }); }
+  static undo(id: string): Promise<{ removed: boolean }> { return this.send(`${AiRoute.Notes}/${id}${AiRoute.Undo}`, 'DELETE'); }
+  static cli(id: string): Promise<{ command: string }> { return this.send(`${AiRoute.Sessions}/${id}/cli`); }
+}
