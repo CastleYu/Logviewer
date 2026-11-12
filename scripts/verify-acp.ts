@@ -76,12 +76,21 @@ class VerifyAcp {
 
     const ask = '请把结论写进 README.md。必须先尝试直接写工作目录里的 README.md。被拒绝后调用 note_write，笔记名用 verify-note，正文写这次结论。';
     await service.prompt({ sessionId: session.id, text: ask });
-    session = await VerifyAcp.until(service, session.id, '笔记', (item) => item.state === AiSessionState.Idle && item.calls.includes(ToolName.NoteWrite), 300_000);
+    session = await VerifyAcp.until(service, session.id, '写文件请求', (item) => item.state === AiSessionState.Idle && item.permits.some((permit) => permit.state === AiPermitState.Deny), 300_000);
+    if (!session.calls.includes(ToolName.NoteWrite)) {
+      await service.prompt({ sessionId: session.id, text: '直接写文件已被拒绝。现在改用 note_write，笔记名 verify-note，正文写这次结论。不要再次尝试写文件。' });
+      session = await VerifyAcp.until(service, session.id, '笔记', (item) => item.state === AiSessionState.Idle && item.calls.includes(ToolName.NoteWrite), 300_000);
+    }
     const denied = session.permits.some((item) => item.state === AiPermitState.Deny) || session.messages.some((msg) => msg.parts.some((part) => part.t === AiPartKind.Deny));
     if (!denied) VerifyAcp.fail('没有拒绝直接写文件');
     const notes = await service.notesOf(log.id);
     if (!notes.some((item) => item.text.trim())) VerifyAcp.fail('笔记未落盘');
     VerifyAcp.say(`5 写文件被拒绝，note_write 已落盘 ${notes.length} 条`);
+
+    await service.view(session.id, { selected: [6, 76, 88], use: true });
+    await service.prompt({ sessionId: session.id, text: '请先用 log_selection 读取当前选中的 3 行，再说明这三行分别是什么问题。' });
+    session = await VerifyAcp.until(service, session.id, '选中行', (item) => item.state === AiSessionState.Idle && item.calls.includes(ToolName.Selection), 300_000);
+    VerifyAcp.say('4b log_selection 读取 3 行');
 
     const before = session.messages.length;
     const agentId = session.agentId || '';
