@@ -146,9 +146,18 @@ export class PermKind {
   static readonly DenyWhy = '请使用 note_write / report_write';
 }
 
+export class AiGuard {
+  static readonly Env = 'OPENCODE_CONFIG_CONTENT';
+  static readonly Rules = [
+    { action: 'edit', resource: '*', effect: 'ask' },
+    { action: 'external_directory', resource: '*', effect: 'ask' },
+    { action: 'shell', resource: '*', effect: 'ask' },
+  ];
+}
+
 export class EnvName {
   static readonly GoKey = 'OPENCODE_GO_API_KEY';
-  static readonly Base = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'ComSpec', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'SYSTEMDRIVE', 'USERNAME'];
+  static readonly Base = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'ComSpec', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'SYSTEMDRIVE', 'USERNAME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'OPENCODE_DB'];
 }
 
 export class LegacyKey {
@@ -259,6 +268,7 @@ export type AiSession = {
   view: AiView;
   closed?: boolean;
   replay?: boolean;
+  loaded?: boolean;
 };
 
 export type AiRemote = { sessionId: string; cwd: string; title: string };

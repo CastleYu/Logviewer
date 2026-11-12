@@ -89,7 +89,7 @@ export class AcpHost {
   private buf = '';
   private seq = 0;
   private readonly pending = new Map<number, Pending>();
-  private stderr = '';
+  private stderr = Buffer.alloc(0);
   readonly caps = new AcpCaps();
   alive = false;
   onNote: Note = () => undefined;
@@ -109,9 +109,8 @@ export class AcpHost {
     }
     host.child = child;
     child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => host.feed(chunk));
-    child.stderr.on('data', (chunk: string) => { host.stderr = (host.stderr + chunk).slice(-2000); });
+    child.stderr.on('data', (chunk: Buffer) => { host.stderr = Buffer.concat([host.stderr, chunk]).subarray(-4000); });
     child.once('error', (error) => host.die(AcpHost.spawnText(error, parts[0])));
     child.once('exit', (code) => host.die(code === 0 ? 'Agent 进程已退出' : `Agent 进程退出，代码 ${code}${host.tail()}`));
     const ready = new Promise<void>((resolve, reject) => {
@@ -144,8 +143,14 @@ export class AcpHost {
   }
 
   private tail(): string {
-    const text = this.redact.text(this.stderr).trim();
+    const text = this.redact.text(AcpHost.decode(this.stderr)).trim();
     return text ? `：${text.split('\n').slice(-2).join(' ').slice(0, 240)}` : '';
+  }
+
+  private static decode(value: Buffer): string {
+    if (!value.length) return '';
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(value); }
+    catch { try { return new TextDecoder('gbk').decode(value); } catch { return value.toString('utf8'); } }
   }
 
   private readCaps(result: Record<string, unknown>): void {
@@ -216,8 +221,8 @@ export class AcpHost {
     try { msg = JSON.parse(line) as Record<string, unknown>; }
     catch { return; }
     const id = typeof msg.id === 'number' ? msg.id : undefined;
-    if (msg.method && id !== undefined && !this.pending.has(id)) {
-      void this.reply(id, String(msg.method), (msg.params || {}) as Record<string, unknown>);
+    if (typeof msg.method === 'string' && id !== undefined) {
+      void this.reply(id, msg.method, (msg.params || {}) as Record<string, unknown>);
       return;
     }
     if (id !== undefined && this.pending.has(id) && (Object.prototype.hasOwnProperty.call(msg, 'result') || msg.error)) {

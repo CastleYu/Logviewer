@@ -7,7 +7,7 @@ import { AcpMcp, type McpBag, type McpCtx } from './acpMcp';
 import { NoteStore } from './noteStore';
 import { AiTerminal } from './aiTerminal';
 import { AiDiagnosis } from '../../src/config/aiDiagnosis';
-import { AiConst, AiCmd, AiDefaults, AiLink, AiMode, AiNoteKind, AiPartKind, AiPermitState, AiRepositoryOrigin, AiSessionState, AiToolStatus, AcpMethod, AcpUpdate, EnvName, LegacyKey, PermKind, ToolName, type AiCommand, type AiConfig, type AiCreateInput, type AiMsg, type AiNote, type AiOption, type AiPart, type AiPermit, type AiProbe, type AiPromptInput, type AiQueueItem, type AiRepositoryInput, type AiRepositoryState, type AiSession, type AiState, type AiView } from '../../src/config/aiTypes';
+import { AiConst, AiCmd, AiDefaults, AiGuard, AiLink, AiMode, AiNoteKind, AiPartKind, AiPermitState, AiRepositoryOrigin, AiSessionState, AiToolStatus, AcpMethod, AcpUpdate, EnvName, LegacyKey, PermKind, ToolName, type AiCommand, type AiConfig, type AiCreateInput, type AiMsg, type AiNote, type AiOption, type AiPart, type AiPermit, type AiProbe, type AiPromptInput, type AiQueueItem, type AiRepositoryInput, type AiRepositoryState, type AiSession, type AiState, type AiView } from '../../src/config/aiTypes';
 import type { HistoryStore } from './historyStore';
 import type { SourceService } from './sourceService';
 import type { SourceTarget } from '../../src/config/sourceTypes';
@@ -141,6 +141,8 @@ export class AiService {
   private readonly waits = new Map<string, Waiter>();
   private readonly once = new Map<string, Set<string>>();
   private readonly listeners = new Set<(payload: unknown) => void>();
+  private readonly hostSessions = new Set<string>();
+  private readonly muted = new Set<string>();
   private tail: Promise<void> = Promise.resolve();
 
   constructor(private readonly root: string, private readonly history: HistoryStore, private readonly deps: AiDeps = {}) {
@@ -167,6 +169,7 @@ export class AiService {
   private env(): { env: NodeJS.ProcessEnv; secrets: string[] } {
     const env: NodeJS.ProcessEnv = {};
     for (const key of EnvName.Base) if (process.env[key]) env[key] = process.env[key];
+    env[AiGuard.Env] = AiService.guard();
     const secrets: string[] = [];
     for (const key of this.config.envAllow || []) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
@@ -176,6 +179,13 @@ export class AiService {
       if (/key|secret|token|password/i.test(key)) secrets.push(value);
     }
     return { env, secrets };
+  }
+
+  private static guard(): string {
+    let base: Record<string, unknown> = {};
+    try { base = JSON.parse(process.env[AiGuard.Env] || '{}') as Record<string, unknown>; } catch { base = {}; }
+    const rules = Array.isArray(base.permissions) ? base.permissions as unknown[] : [];
+    return JSON.stringify({ ...base, permissions: [...rules, ...AiGuard.Rules] });
   }
 
   private async ensure(): Promise<AcpHost> {
@@ -190,6 +200,7 @@ export class AiService {
       throw new AiFail(error instanceof Error ? error.message : '无法启动 Agent');
     }
     this.hostKey = key;
+    this.hostSessions.clear();
     this.host.onNote = (method, params) => { if (method === AcpMethod.Update) this.buffer(params); };
     this.host.onAsk = (method, params) => this.asked(method, params);
     return this.host;
@@ -214,6 +225,7 @@ export class AiService {
   }
 
   private applyUpdate(session: AiSession, params: Record<string, unknown>): void {
+    if (this.muted.has(session.id)) return;
     Transcript.apply(session, params);
     this.emit(session);
   }
@@ -248,6 +260,13 @@ export class AiService {
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
   }
 
+  private outside(session: AiSession, tool: Record<string, unknown>): string[] {
+    const roots = [session.directory, session.snapshot].filter((item): item is string => !!item);
+    const rows = Array.isArray(tool.locations) ? tool.locations : [];
+    return rows.map((row) => String((row as Record<string, unknown>)?.path || ''))
+      .filter((file) => file && !roots.some((root) => AiService.inside(root, file)));
+  }
+
   private markDeny(params: Record<string, unknown>, kind: string, why: string): AiPermit {
     const tool = (params.toolCall || {}) as Record<string, unknown>;
     const session = this.byAgent(String(params.sessionId || '')) || this.sessions.find((item) => item.state === AiSessionState.Busy);
@@ -262,12 +281,12 @@ export class AiService {
     return permit;
   }
 
-  private pick(options: Record<string, unknown>[], allow: boolean): Record<string, unknown> {
+  private pick(options: Record<string, unknown>[], allow: boolean, why = PermKind.DenyWhy): Record<string, unknown> {
     const kinds = allow ? ['allow_once', 'allow_always'] : ['reject_once', 'reject_always'];
-    const hit = options.find((item) => kinds.includes(String(item.kind))) || options[allow ? 0 : options.length - 1];
+    const hit = options.find((item) => kinds.includes(String(item.kind))) || (allow ? options[0] : undefined);
     if (!hit) return { outcome: { outcome: 'cancelled' } };
     const result: Record<string, unknown> = { outcome: { outcome: 'selected', optionId: hit.optionId } };
-    if (!allow) result._meta = { reason: PermKind.DenyWhy };
+    if (!allow) result._meta = { reason: why };
     return result;
   }
 
@@ -283,18 +302,22 @@ export class AiService {
     const allow = !deny && (allowList.includes(kind) || /read|search|fetch|think|list/i.test(kind));
     const once = session ? this.once.get(session.id) : undefined;
     if (once?.has(title)) { once.delete(title); return this.pick(options, true); }
+    if (allow && session && this.outside(session, tool).length) {
+      this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'read', '路径不在工作目录或日志快照内');
+      return this.pick(options, false, '路径不在工作目录或日志快照内');
+    }
     if (allow) return this.pick(options, true);
     if (!session) return this.pick(options, false);
-    if (deny && this.listeners.size === 0) {
+    if (deny) {
       this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'edit', PermKind.DenyWhy);
       return this.pick(options, false);
     }
     const id = String(tool.toolCallId || crypto.randomUUID());
-    const permit: AiPermit = { id, title, kind: kind || 'other', state: AiPermitState.Pending, why: deny ? PermKind.DenyWhy : '等待确认' };
+    const permit: AiPermit = { id, title, kind: kind || 'other', state: AiPermitState.Pending, why: '等待确认' };
     session.permits = [permit, ...session.permits.filter((item) => item.id !== id)].slice(0, 40);
     this.emit(session);
     const choice = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => { this.waits.delete(id); resolve(false); }, deny ? AiConst.HoldMs : AiConst.HoldMs);
+      const timer = setTimeout(() => { this.waits.delete(id); resolve(false); }, AiConst.HoldMs);
       this.waits.set(id, (value) => { clearTimeout(timer); this.waits.delete(id); resolve(value); });
     });
     permit.state = choice ? AiPermitState.Allow : AiPermitState.Deny;
@@ -303,7 +326,7 @@ export class AiService {
       msg.parts.push({ t: AiPartKind.Deny, id, title, why: PermKind.DenyWhy });
     }
     this.emit(session);
-    return this.pick(options, choice);
+    return this.pick(options, choice, deny ? PermKind.DenyWhy : '用户拒绝');
   }
 
   async allow(sessionId: string, permitId: string): Promise<AiSession> {
@@ -322,7 +345,7 @@ export class AiService {
 
   private byAgent(id: string): AiSession | undefined { return this.sessions.find((item) => item.agentId === id); }
   private must(id: string): AiSession { const session = this.sessions.find((item) => item.id === id); if (!session) throw new AiFail('会话不存在'); return session; }
-  private pub(session: AiSession): AiSession { return { ...session, messages: session.messages.slice(), queue: session.queue.slice(), permits: session.permits.slice(), toolSizes: session.toolSizes.slice(-40), calls: session.calls.slice() }; }
+  private pub(session: AiSession): AiSession { return { ...session, loaded: !!session.agentId && this.hostSessions.has(session.agentId), messages: session.messages.slice(), queue: session.queue.slice(), permits: session.permits.slice(), toolSizes: session.toolSizes.slice(-40), calls: session.calls.slice() }; }
 
   async state(): Promise<AiState> {
     await this.init();
@@ -423,6 +446,7 @@ export class AiService {
     catch (error) { this.sessions = this.sessions.filter((item) => item.id !== session.id); throw new AiFail(error instanceof Error ? error.message : '创建会话失败'); }
     session.agentId = String(created.sessionId || '');
     if (!session.agentId) throw new AiFail('Agent 返回了无效会话');
+    this.hostSessions.add(session.agentId);
     session.options = AcpHost.options(created.configOptions);
     const model = session.options.find((item) => item.id === 'model');
     session.model = model?.value || '';
@@ -504,6 +528,7 @@ export class AiService {
   private async drain(session: AiSession): Promise<void> {
     if (this.stopped || session.state === AiSessionState.Busy || session.queuePaused || !session.queue.length) return;
     const item = session.queue[0];
+    session.queue = session.queue.filter((row) => row.id !== item.id);
     session.state = AiSessionState.Busy;
     session.error = undefined;
     session.link = AiLink.Work;
@@ -511,13 +536,13 @@ export class AiService {
     let stopped = false;
     try {
       await this.turn(session, item);
-      session.queue = session.queue.filter((row) => row.id !== item.id);
       session.state = session.queuePaused ? AiSessionState.Aborted : AiSessionState.Idle;
     } catch (error) {
       stopped = session.queuePaused || /cancel|abort|停止/i.test(error instanceof Error ? error.message : '');
       session.state = stopped ? AiSessionState.Aborted : AiSessionState.Error;
       if (!stopped) session.error = error instanceof Error ? error.message : '发送失败';
       if (!stopped) session.queuePaused = true;
+      if (!stopped) session.queue = [item, ...session.queue];
       Transcript.finish(session, stopped);
     }
     session.link = this.host?.alive ? AiLink.Ready : AiLink.Fail;
@@ -529,18 +554,39 @@ export class AiService {
   private async turn(session: AiSession, item: AiQueueItem): Promise<void> {
     const host = await this.ensure();
     if (!session.agentId) throw new AiFail('会话尚未连接 Agent');
+    await this.attach(session, host);
     const first = !session.messages.some((msg) => msg.role === 'user');
     const text = first ? `${this.guide(session)}\n\n用户问题：\n${item.text}` : this.contextLine(session, item.text);
     Transcript.user(session, item.text);
     this.emit(session);
     const result = await host.call(AcpMethod.Prompt, { sessionId: session.agentId, prompt: [{ type: 'text', text }] }, AiConst.PromptMs) as Record<string, unknown>;
     const usage = (result.usage || {}) as Record<string, unknown>;
-    session.usage.input += Number(usage.inputTokens || usage.input || 0);
-    session.usage.output += Number(usage.outputTokens || usage.output || 0);
-    session.usage.total += Number(usage.totalTokens || usage.total || 0) || Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
+    const input = Number(usage.inputTokens || usage.input || 0);
+    const output = Number(usage.outputTokens || usage.output || 0);
+    session.usage.input += input;
+    session.usage.output += output;
+    session.usage.total += input + output;
     const reason = String(result.stopReason || '');
     Transcript.finish(session, reason === 'cancelled');
-    if (reason === 'cancelled') session.queuePaused = true;
+  }
+
+  private async attach(session: AiSession, host: AcpHost): Promise<void> {
+    if (!session.agentId || this.hostSessions.has(session.agentId)) return;
+    if (!host.caps.load) throw new AiFail('Agent 不支持恢复会话，无法继续旧会话');
+    this.muted.add(session.id);
+    try {
+      await host.call(AcpMethod.Load, this.loadParams(session, host), AiConst.PromptMs);
+      this.hostSessions.add(session.agentId);
+    } finally { this.muted.delete(session.id); }
+  }
+
+  private loadParams(session: AiSession, host: AcpHost): Record<string, unknown> {
+    const token = crypto.randomBytes(18).toString('hex');
+    this.bindMcp(token, session);
+    const servers = [{ type: 'http', name: AiConst.McpName, url: this.mcp.url(token), headers: [] }];
+    const params: Record<string, unknown> = { sessionId: session.agentId, cwd: session.directory, mcpServers: servers };
+    if (host.caps.extraDirs && session.snapshot) params.additionalDirectories = [session.snapshot];
+    return params;
   }
 
   private guide(session: AiSession): string {
@@ -559,9 +605,8 @@ export class AiService {
 
   private contextLine(session: AiSession, text: string): string {
     const view = session.view;
-    if (!view.use && !view.search && !view.filter) return text;
     const bits = [view.use && view.selected.length ? `选中 ${view.selected.slice(0, 12).map((line) => `L${line}`).join(' ')}` : '', view.search ? `搜索 ${view.search}` : '', view.filter || ''].filter(Boolean);
-    return bits.length ? `${bits.join(' · ')}\n\n${text}` : text;
+    return [`日志：${session.title}。`, bits.join(' · '), text].filter(Boolean).join('\n');
   }
 
   async abort(id: string): Promise<AiSession> {
@@ -610,20 +655,22 @@ export class AiService {
   }
 
   async refresh(id: string): Promise<AiSession> {
+    await this.init();
     const session = this.must(id);
     if (session.legacy || !session.agentId) return this.pub(session);
     const host = await this.ensure();
     if (!host.caps.load) throw new AiFail('Agent 不支持恢复会话');
-    const token = crypto.randomBytes(18).toString('hex');
-    this.bindMcp(token, session);
-    const servers = [{ type: 'http', name: AiConst.McpName, url: this.mcp.url(token), headers: [] }];
     const prev = session.messages;
     const users = prev.filter((item) => item.role === 'user').length;
     session.messages = [];
     session.replay = true;
     try {
-      await host.call(AcpMethod.Load, { sessionId: session.agentId, cwd: session.directory, mcpServers: servers }, AiConst.PromptMs);
+      await host.call(AcpMethod.Load, this.loadParams(session, host), AiConst.PromptMs);
       this.flush(session);
+      this.hostSessions.add(session.agentId);
+    } catch (error) {
+      session.messages = prev;
+      throw error;
     } finally { session.replay = false; }
     const rebuilt = session.messages.filter((item) => item.role === 'user').length;
     if (!session.messages.length || rebuilt < users) session.messages = prev;
@@ -636,6 +683,7 @@ export class AiService {
   async closeSession(id: string): Promise<AiSession> {
     const session = this.must(id);
     if (session.agentId && this.host?.alive) await this.host.call(AcpMethod.Close, { sessionId: session.agentId }).catch(() => undefined);
+    if (session.agentId) this.hostSessions.delete(session.agentId);
     session.closed = true;
     session.state = AiSessionState.Idle;
     this.emit(session);
@@ -646,6 +694,7 @@ export class AiService {
   async remove(id: string): Promise<AiState> {
     const session = this.must(id);
     if (session.agentId && this.host?.alive) await this.host.call(AcpMethod.Delete, { sessionId: session.agentId }).catch(() => undefined);
+    if (session.agentId) this.hostSessions.delete(session.agentId);
     this.sessions = this.sessions.filter((item) => item.id !== id);
     await this.saveSoon();
     this.emit();
