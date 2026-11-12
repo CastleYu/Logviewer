@@ -266,6 +266,9 @@ export type AiSession = {
   toolSizes: AiToolSize[];
   calls: string[];
   view: AiView;
+  sourceKey?: string;
+  contentHash?: string;
+  origin?: string;
   closed?: boolean;
   replay?: boolean;
   loaded?: boolean;

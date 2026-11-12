@@ -58,22 +58,221 @@ function LineText({ text, jump }: { text: string; jump?: (line: number) => void 
   })}</span>;
 }
 
+function parseToolInfo(name: string, args?: string): { toolName: string; argSummary: string } {
+  let toolName = (name || '').trim();
+  let argSummary = (args || '').trim();
+
+  const m = argSummary.match(/(?:tools\.)?(?:logtools\.)?([a-zA-Z0-9_]+)\s*\(([\s\S]*)\)/);
+  if (m) {
+    if (!toolName || toolName === 'execute' || toolName === 'tool' || toolName.startsWith('tools.')) {
+      toolName = m[1];
+    }
+    const raw = m[2].trim();
+    if (raw.startsWith('{') && raw.endsWith('}')) {
+      try {
+        const obj = JSON.parse(raw);
+        argSummary = Object.entries(obj).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ');
+      } catch {
+        argSummary = raw;
+      }
+    }
+  } else if (toolName.startsWith('tools.logtools.')) {
+    toolName = toolName.replace('tools.logtools.', '');
+  }
+
+  if (toolName.includes('.')) {
+    const parts = toolName.split('.');
+    toolName = parts[parts.length - 1];
+  }
+
+  return { toolName: toolName || '工具', argSummary };
+}
+
+function toolStatusText(status?: string): string {
+  if (!status) return '完成';
+  const s = status.toLowerCase();
+  if (s === 'done' || s === 'completed' || s === 'success') return '完成';
+  if (s === 'running' || s === 'run') return '运行中';
+  if (s === 'pending' || s === 'wait') return '等待';
+  if (s === 'fail' || s === 'failed' || s === 'error') return '失败';
+  return status;
+}
+
+function shortModelName(full: string): string {
+  if (!full) return '模型';
+  const parts = full.split('/');
+  return parts[parts.length - 1].trim() || full;
+}
+
+function ToolCard({ part, jump }: { part: Extract<AiPart, { t: AiPartKind.Tool }>; jump?: (line: number) => void }) {
+  const { toolName, argSummary } = parseToolInfo(part.name, part.args);
+  const statusText = toolStatusText(part.status);
+  const title = [toolName, argSummary, statusText].filter(Boolean).join(' · ');
+
+  return (
+    <details className="rounded border border-line bg-raised px-2 py-1.5 text-xs" open={part.status === AiToolStatus.Fail}>
+      <summary className="cursor-pointer font-medium text-ink-2 hover:text-ink truncate select-none">
+        {title}
+      </summary>
+      {argSummary ? (
+        <div className="mt-1 text-[11px] font-mono text-ink-3 break-all">
+          参数: {argSummary}
+        </div>
+      ) : null}
+      <div className="mt-1.5 max-h-48 overflow-auto rounded bg-sunken p-1.5 font-mono text-[11px] leading-relaxed text-ink-2">
+        <LineText text={part.result || '（无返回结果）'} jump={jump} />
+      </div>
+    </details>
+  );
+}
+
+type ProcessPart = Extract<AiPart, { t: AiPartKind.Thought | AiPartKind.Tool }>;
+
+function ProcessBlock({
+  parts,
+  running,
+  jump,
+}: {
+  parts: ProcessPart[];
+  running?: boolean;
+  jump?: (line: number) => void;
+}) {
+  let currentStep = '执行中';
+  if (running && parts.length > 0) {
+    const last = parts[parts.length - 1];
+    if (last.t === AiPartKind.Thought) {
+      currentStep = '思考中';
+    } else if (last.t === AiPartKind.Tool) {
+      const { toolName } = parseToolInfo(last.name, last.args);
+      currentStep = toolName || '工具调用';
+    }
+  }
+
+  const summaryText = running
+    ? `过程 · 运行中: ${currentStep}`
+    : `过程 · ${parts.length} 步`;
+
+  return (
+    <details className="group rounded-md border border-line bg-raised/50 overflow-hidden text-xs my-1">
+      <summary className="flex cursor-pointer items-center justify-between px-2.5 py-1.5 font-medium text-ink-2 select-none hover:bg-raised transition-colors">
+        <span className="flex items-center gap-1.5">
+          {running ? (
+            <span className="inline-block h-2 w-2 rounded-full bg-warn animate-pulse" />
+          ) : (
+            <span className="inline-block h-2 w-2 rounded-full bg-ok" />
+          )}
+          <span>{summaryText}</span>
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 text-ink-3 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-1.5 border-t border-line/60 p-2 bg-canvas/30 max-h-56 overflow-y-auto">
+        {parts.map((p, index) => {
+          if (p.t === AiPartKind.Thought) {
+            return (
+              <details key={index} className="rounded border border-line/70 bg-sunken px-2 py-1 text-xs text-ink-2">
+                <summary className="cursor-pointer text-[11px] font-medium text-ink-3">思考</summary>
+                <p className="mt-1 whitespace-pre-wrap text-[11px] font-mono leading-relaxed">{p.text}</p>
+              </details>
+            );
+          }
+          return <ToolCard key={index} part={p} jump={jump} />;
+        })}
+      </div>
+    </details>
+  );
+}
+
 function PartView({ part, jump, onUndo, onAllow }: { key?: string | number; part: AiPart; jump?: (line: number) => void; onUndo: (id: string) => void; onAllow: (id: string) => void }) {
   if (part.t === AiPartKind.User) return <LineText text={part.text} jump={jump} />;
-  if (part.t === AiPartKind.Text) return <div onClickCapture={(event) => follow(event, jump)}><Streamdown mode="static" plugins={{ code }} linkSafety={{ enabled: true }}>{linkText(part.text)}</Streamdown></div>;
-  if (part.t === AiPartKind.Thought) return <details className="rounded-md border border-line bg-sunken px-2 py-1 text-xs text-ink-2"><summary>思考</summary><p className="mt-1 whitespace-pre-wrap">{part.text}</p></details>;
-  if (part.t === AiPartKind.Tool) return <details className="rounded-md border border-line bg-raised px-2 py-1 text-xs" open={part.status === AiToolStatus.Fail}><summary className="cursor-pointer">{part.name} · {part.status}</summary><p className="mt-1 text-ink-3">{part.args}</p><div className="mt-1"><LineText text={part.result} jump={jump} /></div></details>;
+  if (part.t === AiPartKind.Text) {
+    return (
+      <div className="ai-markdown text-ink" onClickCapture={(event) => follow(event, jump)}>
+        <Streamdown mode="static" plugins={{ code }} linkSafety={{ enabled: true }}>
+          {linkText(part.text)}
+        </Streamdown>
+      </div>
+    );
+  }
+  if (part.t === AiPartKind.Thought) {
+    return (
+      <details className="rounded-md border border-line bg-sunken px-2 py-1 text-xs text-ink-2">
+        <summary className="cursor-pointer text-ink-3">思考</summary>
+        <p className="mt-1 whitespace-pre-wrap text-[11px] font-mono">{part.text}</p>
+      </details>
+    );
+  }
+  if (part.t === AiPartKind.Tool) {
+    return <ToolCard part={part} jump={jump} />;
+  }
   if (part.t === AiPartKind.Plan) return <ul className="space-y-1 rounded-md border border-line px-2 py-1 text-xs">{part.items.map((item, index) => <li key={index}>{item.status || '·'} {item.text}</li>)}</ul>;
   if (part.t === AiPartKind.Note) return <div className="flex items-center gap-2 rounded-md border border-ok/40 bg-ok-soft px-2 py-1 text-xs"><span>已写入 {part.name || part.kind}</span><button type="button" className="lv-btn h-6 px-2" onClick={() => onUndo(part.id)}>撤销</button></div>;
   if (part.t === AiPartKind.Deny) return <div className="rounded-md border border-danger/40 bg-danger-soft px-2 py-1 text-xs"><p>已拒绝 {part.title}</p><p className="text-ink-2">{part.why}</p><button type="button" className="lv-btn mt-1 h-6 px-2" onClick={() => onAllow(part.id)}>放行</button></div>;
   return null;
 }
 
+type RenderPart =
+  | { kind: 'process'; parts: ProcessPart[] }
+  | { kind: 'single'; part: AiPart };
+
+function groupMessageParts(parts: AiPart[]): RenderPart[] {
+  const result: RenderPart[] = [];
+  let currentGroup: ProcessPart[] = [];
+
+  for (const part of parts) {
+    if (part.t === AiPartKind.Thought || part.t === AiPartKind.Tool) {
+      currentGroup.push(part);
+    } else {
+      if (currentGroup.length > 0) {
+        result.push({ kind: 'process', parts: currentGroup });
+        currentGroup = [];
+      }
+      result.push({ kind: 'single', part });
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    result.push({ kind: 'process', parts: currentGroup });
+  }
+
+  return result;
+}
+
 function Message({ msg, jump, onUndo, onAllow }: { key?: string | number; msg: AiMsg; jump?: (line: number) => void; onUndo: (id: string) => void; onAllow: (id: string) => void }) {
-  return <article className={`rounded-lg px-2 py-1.5 text-sm ${msg.role === 'user' ? 'bg-accent-soft' : 'bg-sunken'}`}>
-    <div className="mb-1 text-[10px] font-semibold text-ink-3">{msg.role === 'user' ? '我' : 'Agent'}{msg.stop ? ' · 已停止' : ''}</div>
-    <div className="space-y-1">{msg.parts.map((part, index) => <PartView key={index} part={part} jump={jump} onUndo={onUndo} onAllow={onAllow} />)}</div>
-  </article>;
+  const groups = groupMessageParts(msg.parts);
+  const isRunning = !msg.done;
+
+  return (
+    <article className={`rounded-lg px-2.5 py-2 text-sm ${msg.role === 'user' ? 'bg-accent-soft text-ink' : 'bg-surface text-ink border border-line/60'}`}>
+      <div className="mb-1 text-[10px] font-semibold text-ink-3">
+        {msg.role === 'user' ? '我' : 'Agent'}
+        {msg.stop ? ' · 已停止' : ''}
+      </div>
+      <div className="space-y-1.5">
+        {groups.map((item, index) => {
+          if (item.kind === 'process') {
+            const isLastGroup = index === groups.length - 1;
+            return (
+              <ProcessBlock
+                key={index}
+                parts={item.parts}
+                running={isRunning && isLastGroup}
+                jump={jump}
+              />
+            );
+          }
+          return (
+            <PartView
+              key={index}
+              part={item.part}
+              jump={jump}
+              onUndo={onUndo}
+              onAllow={onAllow}
+            />
+          );
+        })}
+      </div>
+    </article>
+  );
 }
 
 export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRevision, open, historyOpen, onOpenChange, onHistoryOpenChange, onRepository, onOpenHistory, onJump, getView }: AiWorkspaceProps) {
@@ -103,12 +302,33 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
   const logRef = useRef(log?.id);
   logRef.current = log?.id;
   const box = useRef<HTMLDivElement>(null);
-  const cases = useMemo(() => sessions.filter((item) => !log || item.logId === log.id), [sessions, log?.id]);
+  const cases = useMemo(() => {
+    if (!log) return sessions;
+    const isSample = log.kind === 'sample' || log.origin === '内置示例' || log.name.startsWith('sample_application_');
+    const sampleMatch = log.name.match(/sample_application_(\d+)/);
+    const sampleCount = sampleMatch?.[1] || (logs.length ? String(logs.length) : '');
+    const sampleKey = sampleCount ? `sample:${sampleCount}` : '';
+
+    return sessions.filter((item) => {
+      if (item.logId === log.id) return true;
+      if (isSample) {
+        if (sampleKey && item.sourceKey === sampleKey) return true;
+        if (sampleCount && item.title.includes(`sample_application_${sampleCount}`)) return true;
+        return false;
+      }
+      if (log.origin && log.origin !== '内置示例' && !log.origin.startsWith('浏览器上传')) {
+        if (item.origin === log.origin) return true;
+        if (item.sourceKey === `origin:${log.origin}`) return true;
+      }
+      return false;
+    });
+  }, [sessions, log?.id, log?.name, log?.origin, log?.kind, logs.length]);
   const current = cases.find((item) => item.id === selected) || cases[0];
   const busy = current?.state === AiSessionState.Busy;
   const view = getView?.() || AiDefaults.view();
   const lines = view.selected;
-  const chipText = lines.length ? `选中 ${lines.length} 行 · L${Math.min(...lines)}–L${Math.max(...lines)}` : view.search ? `搜索 ${view.search}` : view.filter ? `筛选 ${view.filter}` : '';
+  const lineRange = lines.length === 1 ? `L${lines[0]}` : `L${Math.min(...lines)}–L${Math.max(...lines)}`;
+  const chipText = lines.length ? (lines.length === 1 ? `L${lines[0]}` : `选中 ${lines.length} 行 · ${lineRange}`) : view.search ? `搜索 ${view.search}` : view.filter ? `筛选 ${view.filter}` : '';
   const model = current?.options.find((item) => item.id === 'model');
   const mode = current?.options.find((item) => item.id === 'mode');
   const slash = draft.startsWith('/') && !draft.includes(' ') ? draft.slice(1) : '';
@@ -173,8 +393,9 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
   const ensure = async (fresh = false): Promise<AiSession> => {
     if (!fresh && current && !current.closed) return current;
     if (!log) throw new Error('请先打开日志');
-    let sourceMode = (config.mode || AiMode.Source) === AiMode.Source;
-    let repositoryPath = log.repository || repository?.repository;
+    const isSample = log.kind === 'sample' || log.origin === '内置示例' || log.name.startsWith('sample_application_');
+    let sourceMode = !isSample && (config.mode || AiMode.Source) === AiMode.Source;
+    let repositoryPath = sourceMode ? (log.repository || repository?.repository) : undefined;
     if (sourceMode && !repositoryPath) {
       const resolved = await AiApi.repository({ logId: log.id, targets: sourceTargets, repository: log.repository });
       repositoryPath = resolved.repository || (resolved.candidates.length === 1 ? resolved.candidates[0].repository : undefined);
@@ -245,14 +466,28 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
   const suggestions = [
     { label: '概览这份日志', text: '概览这份日志' },
     { label: '分析错误', text: '分析这份日志里最主要的错误' },
-    { label: `分析选中的 ${lines.length} 行`, text: '分析当前选中的行', off: !lines.length },
+    { label: lines.length === 1 ? `分析选中的 L${lines[0]}` : `分析选中的 ${lines.length} 行`, text: '分析当前选中的行', off: !lines.length },
     { label: '分析当前筛选结果', text: '分析当前筛选结果', off: !view.filter && !view.search },
   ];
 
+  const rawModelName = model?.options.find((item) => item.value === (current?.model || model.value))?.name || current?.model || '模型';
+  const displayModelName = shortModelName(rawModelName);
+  const modeName = mode?.options.find((item) => item.value === (current?.modeId || mode.value))?.name || '模式';
+
   const bar = <>
-    <Tooltip text={linkName}><span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} aria-label={linkName} /></Tooltip>
-    <button type="button" className="lv-btn h-6 max-w-36 px-2 text-[10px]" disabled={!model} onClick={(event) => openMenu('model', event)}>{model?.options.find((item) => item.value === (current?.model || model.value))?.name || current?.model || '模型'}<ChevronDown className="h-3 w-3" /></button>
-    {mode?.options.length ? <button type="button" className="lv-btn h-6 max-w-24 px-2 text-[10px]" onClick={(event) => openMenu('mode', event)}>{mode.options.find((item) => item.value === (current?.modeId || mode.value))?.name || '模式'}<ChevronDown className="h-3 w-3" /></button> : null}
+    <Tooltip text={linkName}><span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} aria-label={linkName} /></Tooltip>
+    <Tooltip text={rawModelName}>
+      <button type="button" className="lv-btn h-6 max-w-36 shrink-0 truncate px-2 text-[10px] flex items-center gap-1" disabled={!model} onClick={(event) => openMenu('model', event)}>
+        <span className="truncate">{displayModelName}</span>
+        <ChevronDown className="h-3 w-3 shrink-0" />
+      </button>
+    </Tooltip>
+    {mode?.options.length ? (
+      <button type="button" className="lv-btn h-6 shrink-0 px-2 text-[10px] flex items-center gap-1" onClick={(event) => openMenu('mode', event)}>
+        <span className="truncate">{modeName}</span>
+        <ChevronDown className="h-3 w-3 shrink-0" />
+      </button>
+    ) : null}
   </>;
 
   return <>

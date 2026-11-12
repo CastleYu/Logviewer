@@ -65,20 +65,70 @@ class Transcript {
     return AiToolStatus.Wait;
   }
 
+  static parseToolInfo(update: Record<string, unknown>): { name: string; args: string } {
+    let name = String(update.title || update.kind || 'tool');
+    let args = '';
+
+    const rawInput = update.rawInput;
+    if (rawInput && typeof rawInput === 'object') {
+      const rec = rawInput as Record<string, unknown>;
+      if (typeof rec.code === 'string') {
+        const code = rec.code;
+        const matches = Array.from(code.matchAll(/tools(?:\.logtools)?\.([a-zA-Z0-9_]+)\s*\(([\s\S]*?)\)/g));
+        if (matches.length > 0) {
+          name = matches[0][1];
+          const argText = matches[0][2].trim();
+          if (argText) {
+            try {
+              const cleaned = argText.replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":').replace(/'/g, '"');
+              const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+              args = Object.entries(parsed)
+                .filter(([, v]) => v !== undefined && v !== null && v !== '')
+                .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                .join(' ');
+            } catch {
+              args = argText.replace(/\s+/g, ' ').slice(0, 100);
+            }
+          }
+        }
+      } else {
+        if (typeof rec.tool === 'string' && rec.tool) name = rec.tool;
+        else if (typeof rec.name === 'string' && rec.name) name = rec.name;
+
+        const argObj = (rec.arguments && typeof rec.arguments === 'object') ? rec.arguments as Record<string, unknown> : rec;
+        args = Object.entries(argObj)
+          .filter(([k, v]) => k !== 'tool' && k !== 'name' && v !== undefined && v !== null && v !== '')
+          .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join(' ');
+      }
+    } else if (typeof rawInput === 'string' && rawInput) {
+      args = rawInput.slice(0, 200);
+    }
+
+    if (name.includes('/') || name.includes('__') || name.startsWith('logtools_')) {
+      const parts = name.split(/[/_]/);
+      const last = parts[parts.length - 1];
+      if (last && ToolName.All.includes(last)) name = last;
+    }
+
+    return { name, args: args.slice(0, 500) };
+  }
+
   static tool(session: AiSession, update: Record<string, unknown>): void {
     const msg = Transcript.agent(session);
     const id = String(update.toolCallId || crypto.randomUUID());
-    const args = update.rawInput ? JSON.stringify(update.rawInput).slice(0, 500) : '';
+    const info = Transcript.parseToolInfo(update);
     const result = Transcript.textOf(update.content).slice(0, 8000);
     const found = msg.parts.find((part): part is Extract<AiPart, { t: AiPartKind.Tool }> => part.t === AiPartKind.Tool && part.id === id);
     if (found) {
-      if (update.title) found.name = String(update.title);
-      if (args) found.args = args;
+      if (info.name && info.name !== 'tool' && info.name !== 'execute') found.name = info.name;
+      else if (update.title) found.name = String(update.title);
+      if (info.args) found.args = info.args;
       if (result) found.result = result;
       if (update.status) found.status = Transcript.status(update.status);
       return;
     }
-    msg.parts.push({ t: AiPartKind.Tool, id, name: String(update.title || update.kind || 'tool'), args, status: Transcript.status(update.status), result });
+    msg.parts.push({ t: AiPartKind.Tool, id, name: info.name, args: info.args, status: Transcript.status(update.status), result });
   }
 
   static plan(session: AiSession, update: Record<string, unknown>): void {
@@ -422,11 +472,12 @@ export class AiService {
 
   async create(input: AiCreateInput): Promise<AiSession> {
     await this.init();
-    const mode = input.mode ?? this.config.mode ?? AiMode.Source;
+    const log = await this.history.get(input.logId);
+    const isSample = log.kind === 'sample' || log.origin === '内置示例' || log.name.startsWith('sample_application_');
+    const mode = isSample ? AiMode.Isolated : (input.mode ?? this.config.mode ?? AiMode.Source);
     if (!Object.values(AiMode).includes(mode)) throw new AiFail('请选择日志隔离或源码模式');
     const binding = mode === AiMode.Source ? await this.repository({ logId: input.logId, targets: input.targets, repository: input.repository }) : undefined;
     if (mode === AiMode.Source && !binding?.repository) throw new AiFail(binding?.candidates.length ? '日志索引匹配多个代码仓，请先选定仓库。' : '未能确定代码仓，请配置索引或手动绑定。');
-    const log = await this.history.get(input.logId);
     const content = await this.history.content(input.logId);
     const area = await this.workspace({ ...input, mode, repository: binding?.repository }, content);
     if (input.installRecipe ?? this.config.installRecipe) await this.recipes(area.directory);
@@ -436,6 +487,14 @@ export class AiService {
     const token = crypto.randomBytes(18).toString('hex');
     const session = this.blank(input.logId, mode, area.directory, area.repository, area.trackLog, log.name);
     session.snapshot = path.dirname(this.history.contentPath(log.id));
+    session.origin = log.origin;
+    if (isSample) {
+      const sampleCount = (log.name.match(/sample_application_(\d+)/)?.[1]) || String(content.split(/\r?\n/).length);
+      session.sourceKey = `sample:${sampleCount}`;
+    } else {
+      session.contentHash = crypto.createHash('sha256').update(content).digest('hex');
+      session.sourceKey = log.origin && !log.origin.startsWith('浏览器上传') ? `origin:${log.origin}` : `hash:${session.contentHash}`;
+    }
     this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)];
     this.bindMcp(token, session);
     const servers = [{ type: 'http', name: AiConst.McpName, url: this.mcp.url(token), headers: [] }];
@@ -827,6 +886,13 @@ export class AiService {
     base.created = typeof raw.created === 'string' ? raw.created : base.created;
     base.model = typeof raw.model === 'string' ? raw.model : undefined;
     base.snapshot = typeof raw.snapshot === 'string' ? raw.snapshot : undefined;
+    base.sourceKey = typeof raw.sourceKey === 'string' ? raw.sourceKey : undefined;
+    base.contentHash = typeof raw.contentHash === 'string' ? raw.contentHash : undefined;
+    base.origin = typeof raw.origin === 'string' ? raw.origin : undefined;
+    if (!base.sourceKey && base.title.startsWith('sample_application_')) {
+      const m = base.title.match(/sample_application_(\d+)/);
+      if (m) base.sourceKey = `sample:${m[1]}`;
+    }
     base.messages = Array.isArray(raw.messages) ? raw.messages.map((item) => AiService.msg(item)).filter((item): item is AiMsg => !!item) : [];
     base.queue = [];
     base.state = AiSessionState.Idle;

@@ -32,6 +32,12 @@
   --color-ok-soft: #e6f5ee;
   --color-warn: #b7660b;
   --color-warn-soft: #fdf3e3;
+  --color-background: var(--color-surface);
+  --color-sidebar: var(--color-raised);
+  --color-muted: var(--color-sunken);
+  --color-border: var(--color-line);
+  --color-foreground: var(--color-ink);
+  --color-muted-foreground: var(--color-ink-2);
 
   --color-slate-50: #f8f9fa;
   --color-slate-100: #f1f2f5;
@@ -82,6 +88,12 @@
   --color-ok-soft: #12291f;
   --color-warn: #e3a446;
   --color-warn-soft: #2f2210;
+  --color-background: #171a20;
+  --color-sidebar: #1e222a;
+  --color-muted: #12151a;
+  --color-border: #2a2f38;
+  --color-foreground: #e6e8ec;
+  --color-muted-foreground: #b3b9c4;
   --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 36px -8px rgb(0 0 0 / 0.6);
   --shadow-window: 0 2px 8px rgb(0 0 0 / 0.45), 0 30px 70px -16px rgb(0 0 0 / 0.75);
 }
@@ -363,20 +375,96 @@
 .animate-nav-target-error {
   animation: navTargetPulseError 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   z-index: 30 !important;
+
 }
 
 .animate-nav-target-warn {
   animation: navTargetPulseWarn 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   z-index: 30 !important;
+
 }
 
 .animate-nav-target-info {
   animation: navTargetPulseInfo 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   z-index: 30 !important;
+
 }
 
 .animate-nav-target-default {
   animation: navTargetPulseDefault 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   z-index: 30 !important;
+}
+
+/* AI 对话 Markdown 语义化 Token 配色（深色模式严禁白底） */
+.ai-markdown {
+  color: var(--color-ink);
+}
+.ai-markdown p {
+  color: var(--color-ink);
+  line-height: 1.6;
+}
+.ai-markdown pre,
+.ai-markdown [data-streamdown="code-block-body"] {
+  background-color: var(--color-sunken) !important;
+  color: var(--color-ink) !important;
+  border-color: var(--color-line) !important;
+}
+.dark .ai-markdown pre,
+.dark .ai-markdown [data-streamdown="code-block-body"],
+.dark [data-streamdown="code-block-body"] {
+  background-color: var(--color-sunken) !important;
+  color: var(--color-ink) !important;
+  border-color: var(--color-line) !important;
+}
+.dark .ai-markdown [data-streamdown="code-block"],
+.dark [data-streamdown="code-block"] {
+  background-color: var(--color-raised) !important;
+  border-color: var(--color-line) !important;
+  color: var(--color-ink) !important;
+}
+.dark .ai-markdown pre code,
+.dark [data-streamdown="code-block-body"] pre {
+  background-color: transparent !important;
+  --sdm-bg: transparent !important;
+  --shiki-dark-bg: transparent !important;
+}
+.dark .ai-markdown code:not([data-block]),
+.dark [data-streamdown="inline-code"] {
+  background-color: var(--color-sunken) !important;
+  border: 1px solid var(--color-line) !important;
+  color: var(--color-accent-ink) !important;
+}
+.dark .ai-markdown table,
+.dark [data-streamdown="table-wrapper"],
+.dark table {
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-line) !important;
+  color: var(--color-ink) !important;
+}
+.dark .ai-markdown thead,
+.dark [data-streamdown="table-header"],
+.dark thead {
+  background-color: var(--color-raised) !important;
+  border-bottom: 1px solid var(--color-line-strong) !important;
+}
+.dark .ai-markdown th,
+.dark [data-streamdown="table-header-cell"],
+.dark th {
+  color: var(--color-ink) !important;
+  border-color: var(--color-line) !important;
+}
+.dark .ai-markdown td,
+.dark [data-streamdown="table-cell"],
+.dark td {
+  color: var(--color-ink-2) !important;
+  border-color: var(--color-line) !important;
+}
+.dark .ai-markdown blockquote,
+.dark [data-streamdown="blockquote"],
+.dark blockquote {
+  background-color: var(--color-sunken) !important;
+  border-left-color: var(--color-accent) !important;
+  color: var(--color-ink-2) !important;
+
 }
 
