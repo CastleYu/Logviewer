@@ -31,6 +31,13 @@ export class AiConst {
   static readonly BootMs = 30_000;
   static readonly HoldMs = 20_000;
   static readonly LineRef = 'L';
+  static readonly GuideHead = '你是 LogViewer 的日志诊断助手';
+  static readonly GuideHeads = [AiConst.GuideHead, '你是 LogViewer 里的诊断助手'];
+  static readonly ContinueTag = '[logviewer-continue]';
+  static readonly ContinueMax = 1;
+  static readonly ToolBudget = 12;
+  static readonly BudgetMessage = '本轮工具调用预算已用尽，请立即基于已有结果给出正文回答，不要再调用任何工具。';
+  static readonly ContinuePrompt = '[logviewer-continue] 上一步的工具调用已被只读策略拒绝，本轮不能以拒绝结束。不要重试被拒绝的调用，也不要再探索仓库。如果用户要求保存结论，请改用 note_write 或 report_write；否则立即基于已经取得的 log_* 工具结果，用中文给出完整正文回答，并引用日志行号（例如 L1234）。';
 }
 
 export class AiCmd {
@@ -143,15 +150,19 @@ export class PermKind {
   static readonly Execute = 'execute';
   static readonly Allow = [PermKind.Read, PermKind.Search, PermKind.Fetch, PermKind.Think];
   static readonly Deny = [PermKind.Edit, PermKind.Delete, PermKind.Move, PermKind.Execute];
-  static readonly DenyWhy = '请使用 note_write / report_write';
+  static readonly WriteWhy = '仓库写入已被只读策略拒绝。请改用 note_write 或 report_write 保存结论。';
+  static readonly RunWhy = '命令执行已被只读策略拒绝。不要重试；请改用 log_overview / log_errors / log_read / log_record 等日志工具，并基于已有结果作答。';
+  static readonly DenyWhy = PermKind.RunWhy;
 }
 
 export class AiGuard {
   static readonly Env = 'OPENCODE_CONFIG_CONTENT';
+  static readonly Steps = 13;
   static readonly Rules = [
     { action: 'edit', resource: '*', effect: 'ask' },
-    { action: 'external_directory', resource: '*', effect: 'ask' },
-    { action: 'shell', resource: '*', effect: 'ask' },
+    { action: 'external_directory', resource: '*', effect: 'deny' },
+    { action: 'shell', resource: '*', effect: 'deny' },
+    { action: 'execute', resource: '*', effect: 'deny' },
   ];
 }
 
@@ -218,7 +229,7 @@ export type AiPart =
   | { t: AiPartKind.Note; id: string; name: string; kind: AiNoteKind }
   | { t: AiPartKind.Deny; id: string; title: string; why: string };
 
-export type AiMsg = { id: string; role: 'user' | 'agent'; parts: AiPart[]; done?: boolean; stop?: boolean };
+export type AiMsg = { id: string; role: 'user' | 'agent'; parts: AiPart[]; done?: boolean; stop?: boolean; system?: boolean; display?: string };
 
 export type AiQueueItem = { id: string; text: string; steer?: boolean; created: string };
 export type AiPermit = { id: string; title: string; kind: string; state: AiPermitState; why: string };

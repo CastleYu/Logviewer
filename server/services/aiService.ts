@@ -26,8 +26,45 @@ class AiEnv {
 }
 
 class Transcript {
-  static user(session: AiSession, text: string): void {
-    session.messages.push({ id: crypto.randomUUID(), role: 'user', parts: [{ t: AiPartKind.User, text }] });
+  static user(session: AiSession, text: string, system = false, display = ''): void {
+    session.messages.push({
+      id: crypto.randomUUID(),
+      role: 'user',
+      parts: [{ t: AiPartKind.User, text }],
+      ...(system ? { system: true } : {}),
+      ...(display ? { display } : {}),
+    });
+  }
+
+  static isSystem(text: string): boolean {
+    const head = text.replace(/^\uFEFF/, '').trimStart();
+    return AiConst.GuideHeads.some((item) => head.startsWith(item)) || head.startsWith(AiConst.ContinueTag);
+  }
+
+  static questionOf(text: string): string {
+    const marker = '用户问题：';
+    const index = text.lastIndexOf(marker);
+    return index >= 0 ? text.slice(index + marker.length).trim() : '';
+  }
+
+  static replayUser(session: AiSession, text: string): void {
+    const head = text.replace(/^\uFEFF/, '').trimStart();
+    if (head.startsWith(AiConst.ContinueTag)) return;
+    const system = Transcript.isSystem(text);
+    Transcript.user(session, text, system, system ? Transcript.questionOf(text) : '');
+  }
+
+  static mergeAgents(messages: AiMsg[]): AiMsg[] {
+    const out: AiMsg[] = [];
+    for (const msg of messages) {
+      const last = out[out.length - 1];
+      if (msg.role === 'agent' && last?.role === 'agent') {
+        out[out.length - 1] = { ...last, parts: [...last.parts, ...msg.parts], done: last.done || msg.done, stop: last.stop || msg.stop };
+        continue;
+      }
+      out.push(msg);
+    }
+    return out;
   }
 
   static agent(session: AiSession): AiMsg {
@@ -105,7 +142,11 @@ class Transcript {
       args = rawInput.slice(0, 200);
     }
 
-    if (name.includes('/') || name.includes('__') || name.startsWith('logtools_')) {
+    if (name.startsWith(`${AiConst.McpName}_`)) {
+      const stripped = name.slice(AiConst.McpName.length + 1);
+      if (ToolName.All.includes(stripped)) name = stripped;
+    }
+    if (name.includes('/') || name.includes('__')) {
       const parts = name.split(/[/_]/);
       const last = parts[parts.length - 1];
       if (last && ToolName.All.includes(last)) name = last;
@@ -119,6 +160,10 @@ class Transcript {
     const id = String(update.toolCallId || crypto.randomUUID());
     const info = Transcript.parseToolInfo(update);
     const result = Transcript.textOf(update.content).slice(0, 8000);
+    if (result.includes(AiConst.BudgetMessage)) {
+      msg.parts = msg.parts.filter((part) => !(part.t === AiPartKind.Tool && part.id === id));
+      return;
+    }
     const found = msg.parts.find((part): part is Extract<AiPart, { t: AiPartKind.Tool }> => part.t === AiPartKind.Tool && part.id === id);
     if (found) {
       if (info.name && info.name !== 'tool' && info.name !== 'execute') found.name = info.name;
@@ -162,7 +207,7 @@ class Transcript {
     }
     if (kind === AcpUpdate.User) {
       if (!session.replay) return;
-      Transcript.user(session, Transcript.textOf(update.content));
+      Transcript.replayUser(session, Transcript.textOf(update.content));
       return;
     }
     if (kind === AcpUpdate.Text) Transcript.chunk(session, false, Transcript.textOf(update.content));
@@ -190,6 +235,8 @@ export class AiService {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly waits = new Map<string, Waiter>();
   private readonly once = new Map<string, Set<string>>();
+  private readonly denies = new Map<string, number>();
+  private readonly budgets = new Map<string, number>();
   private readonly listeners = new Set<(payload: unknown) => void>();
   private readonly hostSessions = new Set<string>();
   private readonly muted = new Set<string>();
@@ -235,7 +282,9 @@ export class AiService {
     let base: Record<string, unknown> = {};
     try { base = JSON.parse(process.env[AiGuard.Env] || '{}') as Record<string, unknown>; } catch { base = {}; }
     const rules = Array.isArray(base.permissions) ? base.permissions as unknown[] : [];
-    return JSON.stringify({ ...base, permissions: [...rules, ...AiGuard.Rules] });
+    const agents = base.agents && typeof base.agents === 'object' ? base.agents as Record<string, unknown> : {};
+    const build = agents.build && typeof agents.build === 'object' ? agents.build as Record<string, unknown> : {};
+    return JSON.stringify({ ...base, permissions: [...rules, ...AiGuard.Rules], agents: { ...agents, build: { ...build, steps: AiGuard.Steps } } });
   }
 
   private async ensure(): Promise<AcpHost> {
@@ -283,8 +332,8 @@ export class AiService {
   private async asked(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (method === AcpMethod.Read) return this.readFs(params);
     if (method === AcpMethod.Write) {
-      this.markDeny(params, 'write', `客户端未声明写入能力。${PermKind.DenyWhy}`);
-      throw new AiFail(`客户端未声明写入能力。${PermKind.DenyWhy}`);
+      this.markDeny(params, 'write', `客户端未声明写入能力。${PermKind.WriteWhy}`);
+      throw new AiFail(`客户端未声明写入能力。${PermKind.WriteWhy}`);
     }
     if (method === AcpMethod.Permit) return this.permit(params);
     return {};
@@ -322,6 +371,7 @@ export class AiService {
     const session = this.byAgent(String(params.sessionId || '')) || this.sessions.find((item) => item.state === AiSessionState.Busy);
     const permit: AiPermit = { id: String(tool.toolCallId || crypto.randomUUID()), title: String(tool.title || params.path || kind), kind, state: AiPermitState.Deny, why };
     if (session) {
+      this.denies.set(session.id, (this.denies.get(session.id) || 0) + 1);
       session.permits = [permit, ...session.permits.filter((item) => item.id !== permit.id)].slice(0, 40);
       const msg = Transcript.agent(session);
       msg.parts.push({ t: AiPartKind.Deny, id: permit.id, title: permit.title, why });
@@ -348,19 +398,21 @@ export class AiService {
     const session = this.byAgent(String(params.sessionId || '')) || this.sessions.find((item) => item.state === AiSessionState.Busy);
     const allowList = this.config.allow || PermKind.Allow;
     const denyList = this.config.deny || PermKind.Deny;
+    const run = /execut|bash|shell/i.test(`${kind} ${title}`);
     const deny = denyList.includes(kind) || /edit|write|delete|move|execut|bash|shell/i.test(`${kind} ${title}`);
+    const why = run ? PermKind.RunWhy : PermKind.WriteWhy;
     const allow = !deny && (allowList.includes(kind) || /read|search|fetch|think|list/i.test(kind));
     const once = session ? this.once.get(session.id) : undefined;
     if (once?.has(title)) { once.delete(title); return this.pick(options, true); }
     if (allow && session && this.outside(session, tool).length) {
-      this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'read', '路径不在工作目录或日志快照内');
-      return this.pick(options, false, '路径不在工作目录或日志快照内');
+      this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'read', PermKind.RunWhy);
+      return this.pick(options, false, PermKind.RunWhy);
     }
     if (allow) return this.pick(options, true);
     if (!session) return this.pick(options, false);
     if (deny) {
-      this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'edit', PermKind.DenyWhy);
-      return this.pick(options, false);
+      this.markDeny({ ...params, toolCall: { ...tool, title } }, kind || 'edit', why);
+      return this.pick(options, false, why);
     }
     const id = String(tool.toolCallId || crypto.randomUUID());
     const permit: AiPermit = { id, title, kind: kind || 'other', state: AiPermitState.Pending, why: '等待确认' };
@@ -372,11 +424,12 @@ export class AiService {
     });
     permit.state = choice ? AiPermitState.Allow : AiPermitState.Deny;
     if (!choice) {
+      this.denies.set(session.id, (this.denies.get(session.id) || 0) + 1);
       const msg = Transcript.agent(session);
-      msg.parts.push({ t: AiPartKind.Deny, id, title, why: PermKind.DenyWhy });
+      msg.parts.push({ t: AiPartKind.Deny, id, title, why });
     }
     this.emit(session);
-    return this.pick(options, choice, deny ? PermKind.DenyWhy : '用户拒绝');
+    return this.pick(options, choice, deny ? why : '用户拒绝');
   }
 
   async allow(sessionId: string, permitId: string): Promise<AiSession> {
@@ -539,6 +592,12 @@ export class AiService {
         this.emit(session);
         void this.saveSoon();
       },
+      spend: () => {
+        const left = this.budgets.get(session.id) ?? AiConst.ToolBudget;
+        if (left <= 0) return false;
+        this.budgets.set(session.id, left - 1);
+        return true;
+      },
     };
     this.mcp.tokens.set(token, ctx);
   }
@@ -617,7 +676,28 @@ export class AiService {
     const first = !session.messages.some((msg) => msg.role === 'user');
     const text = first ? `${this.guide(session)}\n\n用户问题：\n${item.text}` : this.contextLine(session, item.text);
     Transcript.user(session, item.text);
+    this.budgets.set(session.id, AiConst.ToolBudget);
     this.emit(session);
+    const deniedBefore = this.denies.get(session.id) || 0;
+    let result: Record<string, unknown> | undefined;
+    let failure: unknown;
+    for (let attempt = 0; attempt <= AiConst.ContinueMax; attempt += 1) {
+      try {
+        result = await this.promptOnce(host, session, attempt === 0 ? text : AiConst.ContinuePrompt);
+        failure = undefined;
+      } catch (error) {
+        failure = error;
+        result = undefined;
+      }
+      const denied = (this.denies.get(session.id) || 0) > deniedBefore;
+      if (!denied || AiService.answered(session) || attempt >= AiConst.ContinueMax) break;
+    }
+    if (!result) throw failure instanceof Error ? failure : new AiFail('Agent 未返回结果');
+    const reason = String(result.stopReason || '');
+    Transcript.finish(session, reason === 'cancelled');
+  }
+
+  private async promptOnce(host: AcpHost, session: AiSession, text: string): Promise<Record<string, unknown>> {
     const result = await host.call(AcpMethod.Prompt, { sessionId: session.agentId, prompt: [{ type: 'text', text }] }, AiConst.PromptMs) as Record<string, unknown>;
     const usage = (result.usage || {}) as Record<string, unknown>;
     const input = Number(usage.inputTokens || usage.input || 0);
@@ -625,8 +705,13 @@ export class AiService {
     session.usage.input += input;
     session.usage.output += output;
     session.usage.total += input + output;
-    const reason = String(result.stopReason || '');
-    Transcript.finish(session, reason === 'cancelled');
+    return result;
+  }
+
+  private static answered(session: AiSession): boolean {
+    const last = [...session.messages].reverse().find((msg) => msg.role === 'agent');
+    const part = last?.parts[last.parts.length - 1];
+    return part?.t === AiPartKind.Text && !!part.text.trim();
   }
 
   private async attach(session: AiSession, host: AcpHost): Promise<void> {
@@ -650,14 +735,16 @@ export class AiService {
 
   private guide(session: AiSession): string {
     const view = session.view;
+    const source = session.mode === AiMode.Source;
     const selected = view.use && view.selected.length ? `当前选中 ${view.selected.length} 行 ${view.selected.slice(0, 12).map((line) => `L${line}`).join(' ')}` : '未选中行';
     return [
-      '你是 LogViewer 里的诊断助手。不要假设已经看到日志全文，请用工具按需读取。',
+      source ? '你是 LogViewer 里的诊断助手。不要假设已经看到日志全文，请用工具按需读取。' : AiDiagnosis.Log,
       `工具：${ToolName.All.join('、')}。`,
       '引用日志必须写成 L行号，例如 L1234。',
-      `仓库内直接写文件会被系统拒绝。若用户要求写入 README 等文件，先尝试一次写文件以确认拒绝，再改用 note_write 或 report_write。${PermKind.DenyWhy}。`,
-      AiDiagnosis.Core,
-      this.config.recipe ? AiDiagnosis.Report : '',
+      source ? AiDiagnosis.SourceFlow : '',
+      source ? AiDiagnosis.Core : '',
+      source && this.config.recipe ? AiDiagnosis.Report : '',
+      '默认使用 note_write 或 report_write 保存结论，不要主动写项目文件；如果用户明确要求先尝试写入某个项目文件，按用户要求执行一次，被拒绝后再改用 note_write 或 report_write。',
       `日志：${session.title}。${selected}。${view.search ? `搜索 ${view.search}。` : ''}${view.filter ? `筛选 ${view.filter}。` : ''}`,
     ].filter(Boolean).join('\n');
   }
@@ -726,6 +813,7 @@ export class AiService {
     try {
       await host.call(AcpMethod.Load, this.loadParams(session, host), AiConst.PromptMs);
       this.flush(session);
+      session.messages = Transcript.mergeAgents(session.messages);
       this.hostSessions.add(session.agentId);
     } catch (error) {
       session.messages = prev;
@@ -894,6 +982,15 @@ export class AiService {
       if (m) base.sourceKey = `sample:${m[1]}`;
     }
     base.messages = Array.isArray(raw.messages) ? raw.messages.map((item) => AiService.msg(item)).filter((item): item is AiMsg => !!item) : [];
+    for (const msg of base.messages) {
+      if (msg.role !== 'user') continue;
+      const text = msg.parts.map((part) => part.t === AiPartKind.User ? part.text : '').join('\n');
+      if (!msg.system && Transcript.isSystem(text)) msg.system = true;
+      if (msg.system && !msg.display) {
+        const question = Transcript.questionOf(text);
+        if (question) msg.display = question;
+      }
+    }
     base.queue = [];
     base.state = AiSessionState.Idle;
     base.closed = raw.closed === true;
@@ -909,13 +1006,15 @@ export class AiService {
     if (!value || typeof value !== 'object') return null;
     const row = value as Record<string, unknown>;
     if (Array.isArray(row.parts) && (row.role === 'user' || row.role === 'agent') && row.parts.every((part) => part && typeof part === 'object' && 't' in (part as object))) {
-      return { id: String(row.id || crypto.randomUUID()), role: row.role, parts: row.parts as AiPart[], done: row.done === true, stop: row.stop === true };
+      return { id: String(row.id || crypto.randomUUID()), role: row.role, parts: row.parts as AiPart[], done: row.done === true, stop: row.stop === true, system: row.system === true, display: typeof row.display === 'string' ? row.display : undefined };
     }
     const info = (row.info || {}) as Record<string, unknown>;
     const parts = Array.isArray(row.parts) ? row.parts : [];
     const text = parts.map((part) => Transcript.textOf((part as Record<string, unknown>).text || (part as Record<string, unknown>).content || part)).join('\n');
     const role = info.role === 'user' ? 'user' : 'agent';
-    return { id: crypto.randomUUID(), role, parts: [role === 'user' ? { t: AiPartKind.User, text } : { t: AiPartKind.Text, text }], done: true };
+    const system = role === 'user' && Transcript.isSystem(text);
+    const display = system ? Transcript.questionOf(text) : '';
+    return { id: crypto.randomUUID(), role, parts: [role === 'user' ? { t: AiPartKind.User, text } : { t: AiPartKind.Text, text }], done: true, ...(system ? { system: true } : {}), ...(display ? { display } : {}) };
   }
 
   private saveSoon(): Promise<void> {

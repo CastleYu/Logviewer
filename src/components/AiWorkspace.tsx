@@ -79,6 +79,8 @@ function parseToolInfo(name: string, args?: string): { toolName: string; argSumm
   } else if (toolName.startsWith('tools.logtools.')) {
     toolName = toolName.replace('tools.logtools.', '');
   }
+  if (toolName.startsWith('logtools_')) toolName = toolName.slice('logtools_'.length);
+  if (toolName.startsWith('logtools.')) toolName = toolName.slice('logtools.'.length);
 
   if (toolName.includes('.')) {
     const parts = toolName.split('.');
@@ -104,7 +106,7 @@ function shortModelName(full: string): string {
   return parts[parts.length - 1].trim() || full;
 }
 
-function ToolCard({ part, jump }: { part: Extract<AiPart, { t: AiPartKind.Tool }>; jump?: (line: number) => void }) {
+function ToolCard({ part, jump }: { key?: string | number; part: Extract<AiPart, { t: AiPartKind.Tool }>; jump?: (line: number) => void }) {
   const { toolName, argSummary } = parseToolInfo(part.name, part.args);
   const statusText = toolStatusText(part.status);
   const title = [toolName, argSummary, statusText].filter(Boolean).join(' · ');
@@ -133,6 +135,7 @@ function ProcessBlock({
   running,
   jump,
 }: {
+  key?: string | number;
   parts: ProcessPart[];
   running?: boolean;
   jump?: (line: number) => void;
@@ -238,6 +241,15 @@ function groupMessageParts(parts: AiPart[]): RenderPart[] {
 }
 
 function Message({ msg, jump, onUndo, onAllow }: { key?: string | number; msg: AiMsg; jump?: (line: number) => void; onUndo: (id: string) => void; onAllow: (id: string) => void }) {
+  if (msg.system) {
+    if (!msg.display) return null;
+    return (
+      <article className="rounded-lg bg-accent-soft px-2.5 py-2 text-sm text-ink">
+        <div className="mb-1 text-[10px] font-semibold text-ink-3">我</div>
+        <LineText text={msg.display} jump={jump} />
+      </article>
+    );
+  }
   const groups = groupMessageParts(msg.parts);
   const isRunning = !msg.done;
 
@@ -462,7 +474,8 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
       setNoteText('');
     } catch (cause) { setError((cause as Error).message); }
   };
-  const empty = !current?.messages.length;
+  const messages = (current?.messages || []).filter((msg) => !msg.system || !!msg.display);
+  const empty = !messages.length;
   const suggestions = [
     { label: '概览这份日志', text: '概览这份日志' },
     { label: '分析错误', text: '分析这份日志里最主要的错误' },
@@ -511,7 +524,7 @@ export function AiWorkspace({ theme, log, logs, request, sourceTargets, sourceRe
           <textarea aria-label="笔记正文" value={noteText} onChange={(event) => setNoteText(event.target.value)} className="h-24 w-full rounded-md border border-line bg-sunken p-2 text-xs" />
           <div className="flex gap-2"><button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!log || !noteText.trim()} onClick={() => void writeNote()}>{noteId ? '保存修改' : '保存笔记'}</button>{noteId ? <button type="button" className="lv-btn h-7 px-2 text-[11px]" onClick={() => { setNoteId(''); setNoteName(''); setNoteText(''); }}>取消</button> : null}<button type="button" className="lv-btn h-7 px-2 text-[11px]" disabled={!notes.length} onClick={() => { const blob = new Blob([notes.map((item) => `# ${item.name}\n\n${item.text}`).join('\n\n')], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'notes.md'; link.click(); URL.revokeObjectURL(url); }}>导出</button></div>
         </div> : <div ref={box} className="min-h-0 flex-1 space-y-2 overflow-auto p-2" role="log">
-          {empty ? <div className="grid grid-cols-2 gap-2">{suggestions.map((item) => <button key={item.label} type="button" disabled={!log || item.off} className="rounded-lg border border-line bg-raised px-2 py-3 text-left text-xs hover:border-line-strong disabled:opacity-40" onClick={() => void send(item.text)}>{item.label}</button>)}</div> : current?.messages.map((msg) => <Message key={msg.id} msg={msg} jump={onJump} onUndo={(id) => void AiApi.undo(id)} onAllow={(id) => current && void act(() => AiApi.allow(current.id, id))} />)}
+          {empty ? <div className="grid grid-cols-2 gap-2">{suggestions.map((item) => <button key={item.label} type="button" disabled={!log || item.off} className="rounded-lg border border-line bg-raised px-2 py-3 text-left text-xs hover:border-line-strong disabled:opacity-40" onClick={() => void send(item.text)}>{item.label}</button>)}</div> : messages.map((msg) => <Message key={msg.id} msg={msg} jump={onJump} onUndo={(id) => void AiApi.undo(id)} onAllow={(id) => current && void act(() => AiApi.allow(current.id, id))} />)}
           {current?.queuePaused ? <p className="text-[11px] text-warn">队列已暂停</p> : null}
         </div>}
         {tab === 'chat' ? <div className="shrink-0 space-y-1 border-t border-line p-2">

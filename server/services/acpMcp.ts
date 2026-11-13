@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { McpMethod, ToolCap, ToolName } from '../../src/config/aiTypes';
+import { AiConst, McpMethod, ToolCap, ToolName } from '../../src/config/aiTypes';
 import { LogTools, type ToolOut } from './logTools';
 
 export type McpBag = { name: string; lines: string[]; logs: import('../../src/types').LogEntry[] };
@@ -10,6 +10,7 @@ export type McpCtx = {
   logId: string;
   onTool: (name: string, out: ToolOut) => void;
   onNote: (note: import('../../src/config/aiTypes').AiNote) => void;
+  spend?: () => boolean;
 };
 
 class McpSchema {
@@ -106,6 +107,9 @@ export class AcpMcp {
   private async call(ctx: McpCtx, params: Record<string, unknown>): Promise<unknown> {
     const name = String(params.name || '');
     const args = (params.arguments || {}) as Record<string, unknown>;
+    if (ctx.spend && !ctx.spend()) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: AiConst.BudgetMessage }) }], isError: false };
+    }
     const tools = new LogTools(ctx.bag(), ctx.view(), ctx.notes, ctx.logId, ctx.onNote);
     const out = await tools.resolve(name, args, tools.call(name, args));
     if (out.bytes > ToolCap.Body) throw new Error(`工具返回超过 ${ToolCap.Body} 字节`);
