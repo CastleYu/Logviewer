@@ -1,264 +1,852 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Check, ChevronDown, ChevronUp, Copy, Download, Filter, Hash,
-  Highlighter, ListFilter, Pin, Plus, Search, SlidersHorizontal, WrapText, X,
+  Bot, Check, ChevronDown, ChevronUp, Copy, Download, Eye, EyeOff, Highlighter, Search, X,
 } from 'lucide-react';
-import {
-  BorderIntensity, ColumnFilterKey, ColumnVisibility, DisplayDensity, FilterOptions,
-  FilterValue, LogEntry, PinnedHighlight, TextColumnFilter, ThemeMode,
-} from '../types';
-import {
-  FieldFilterKind, LogFieldConfig, LogFormatConfig, RuntimeFieldFilter, RuntimeFilterSummary,
-} from '../config/logFormatTypes';
+import { CopyScope, MenuLayerConst, OrdinalJump, TooltipConst, UiShortcutKey } from '../config/uiConstants';
+import { FilterOptions, LogEntry, PinnedHighlight } from '../types';
 import { HIGHLIGHT_COLOR_PRESETS } from '../utils/highlightColors';
-import { isNumericFilterActive, isTextFilterActive } from '../utils/columnFilterUtils';
-import { distinctFieldValues } from '../utils/configuredFilterUtils';
-import { ColumnFilterPopover } from './ColumnFilterPopover';
-import { ConfiguredFieldFilterPopover } from './ConfiguredFieldFilterPopover';
-import { DateRangeFilter } from './DateRangeFilter';
+import { Menu, Tooltip } from './Tooltip';
 
-interface ToolbarProps {
+export interface ToolbarProps {
   filter: FilterOptions;
   onFilterChange: (updated: Partial<FilterOptions>) => void;
-  density: DisplayDensity;
-  onDensityChange: (density: DisplayDensity) => void;
-  columnVisibility: ColumnVisibility;
-  onColumnVisibilityChange: (cols: ColumnVisibility) => void;
   filteredCount: number;
-  uniqueModules: string[];
-  uniqueThreads: string[];
-  timeRange: [number, number] | null;
+  totalCount: number;
   selectedCount: number;
-  onCopySelected: () => void;
-  onSelectAll: () => void;
-  onClearSelection: () => void;
-  onExportJSON: () => void;
-  onExportCSV: () => void;
-  onCopyFilteredRaw: () => void;
   totalMatches: number;
   currentMatchIndex: number;
+  searchActive: boolean;
   onTriggerSearch: () => void;
   onNextMatch: () => void;
   onPrevMatch: () => void;
-  searchMode: 'navigate' | 'highlight';
-  onSearchModeChange: (mode: 'navigate' | 'highlight') => void;
-  navigation?: React.ReactNode;
-  theme: ThemeMode;
-  borderIntensity?: BorderIntensity;
-  onBorderIntensityChange?: (intensity: BorderIntensity) => void;
-  onResetColumnWidths?: () => void;
-  onOpenInvestigationViews: () => void;
-  onJumpToLine?: (lineNumber: number) => void;
-  legacyBoldSelection?: boolean;
-  onLegacyBoldSelectionChange?: (val: boolean) => void;
-  legacyHighlightStyle?: boolean;
-  onLegacyHighlightStyleChange?: (val: boolean) => void;
-  showLegacyFilters?: boolean;
+  onJumpToMatch?: (ordinal: number) => void;
+  onCopyScope: (scope: CopyScope, format: 'raw' | 'json') => Promise<number> | number;
+  onExportScope: (scope: CopyScope, format: 'json' | 'csv') => void;
   searchableFields?: Array<{ key: string; label: string }>;
-  configuredFilterItems?: RuntimeFilterSummary[];
-  format: LogFormatConfig;
   logs: LogEntry[];
+  aiOpen: boolean;
+  onOpenAi: () => void;
 }
 
-type Menu = 'add' | 'view' | 'export' | 'columns' | 'searchColumns' | 'range' | 'highlights' | null;
-type Editor = { kind: 'builtin'; key: ColumnFilterKey; anchor: DOMRect } | { kind: 'configured'; field: LogFieldConfig; anchor: DOMRect } | null;
-type Condition = RuntimeFilterSummary & { kind: 'builtin' | 'configured' | 'range'; column?: ColumnFilterKey };
+type ToolbarMenuKind = 'searchColumns' | 'highlights' | 'export' | null;
 
 const searchBuiltinColumns = [
   { key: 'ALL', label: '全部列 / 原始文本' },
-  { key: 'operationDesc', label: '操作描述' }, { key: 'requestId', label: '请求ID' },
-  { key: 'level', label: '日志级别' }, { key: 'module', label: '模块' },
-  { key: 'functionName', label: '函数名' }, { key: 'threadId', label: '线程ID' },
-  { key: 'fileName', label: '文件名' }, { key: 'lineNumber', label: '行号' },
-  { key: 'memoryAddress', label: '内存地址' }, { key: 'timestamp', label: '时间戳' },
-];
-const columnLabels: Array<{ key: keyof ColumnVisibility; label: string }> = [
-  { key: 'index', label: '序号' }, { key: 'timestamp', label: '时间戳' },
-  { key: 'level', label: '级别' }, { key: 'requestId', label: '请求ID' },
-  { key: 'operationDesc', label: '操作描述' }, { key: 'functionName', label: '函数名' },
-  { key: 'threadId', label: '线程ID' }, { key: 'memoryAddress', label: '内存地址' },
-  { key: 'module', label: '模块' }, { key: 'fileName', label: '文件名' }, { key: 'lineNumber', label: '行号' },
-];
-const builtinFilters: Array<{ key: ColumnFilterKey; label: string }> = [
-  { key: ColumnFilterKey.Level, label: '级别' }, { key: ColumnFilterKey.Module, label: '模块' },
-  { key: ColumnFilterKey.ThreadId, label: '线程' }, { key: ColumnFilterKey.Timestamp, label: '时间范围' },
-  { key: ColumnFilterKey.Index, label: '序号范围' }, { key: ColumnFilterKey.RequestId, label: '请求ID' },
-  { key: ColumnFilterKey.OperationDesc, label: '操作描述' }, { key: ColumnFilterKey.FunctionName, label: '函数名' },
-  { key: ColumnFilterKey.FileName, label: '文件名' }, { key: ColumnFilterKey.MemoryAddress, label: '内存地址' },
+  { key: 'operationDesc', label: '操作描述' },
+  { key: 'requestId', label: '请求ID' },
+  { key: 'level', label: '日志级别' },
+  { key: 'module', label: '模块' },
+  { key: 'functionName', label: '函数名' },
+  { key: 'threadId', label: '线程ID' },
+  { key: 'fileName', label: '文件名' },
+  { key: 'lineNumber', label: '行号' },
+  { key: 'memoryAddress', label: '内存地址' },
+  { key: 'timestamp', label: '时间戳' },
 ];
 
-function textCondition(value: TextColumnFilter, key: ColumnFilterKey, label: string): Condition | null {
-  if (!isTextFilterActive(value)) return null;
-  return { key, kind: 'builtin', column: key, label, summary: `${value.isRegex ? '正则' : value.matchCase ? '区分大小写' : '包含'}：${value.value}` };
-}
+/**
+ * 精简调查工具栏（T1–T14）：单一搜索+分组上下条定位、独立高亮列表、右侧统一复制/导出。
+ */
+export const Toolbar: React.FC<ToolbarProps> = ({
+  filter,
+  onFilterChange,
+  filteredCount,
+  totalCount,
+  selectedCount,
+  totalMatches,
+  currentMatchIndex,
+  searchActive,
+  onTriggerSearch,
+  onNextMatch,
+  onPrevMatch,
+  onJumpToMatch,
+  onCopyScope,
+  onExportScope,
+  searchableFields,
+  logs,
+  aiOpen,
+  onOpenAi,
+}) => {
+  const [menuState, setMenuState] = useState<{ kind: ToolbarMenuKind; anchor: DOMRect | null }>({ kind: null, anchor: null });
+  const [colorPinId, setColorPinId] = useState<string | null>(null);
+  const [copiedBanner, setCopiedBanner] = useState<number | null>(null);
+  const [copyScope, setCopyScope] = useState<CopyScope>(CopyScope.Filtered);
+  const [editingJump, setEditingJump] = useState(false);
+  const [jumpDraft, setJumpDraft] = useState('');
+  const [jumpError, setJumpError] = useState<string | null>(null);
+  const [jumpErrorPos, setJumpErrorPos] = useState<{ left: number; top: number } | null>(null);
 
-function activeConditions(filter: FilterOptions, legacy: boolean, configured: RuntimeFilterSummary[]): Condition[] {
-  if (!legacy) return [
-    ...configured.map((item) => ({ ...item, kind: 'configured' as const })),
-    ...(filter.rangeKeyword ? [{ key: 'range', kind: 'range' as const, label: '首末区间', summary: filter.rangeKeyword }] : []),
-  ];
-  const result: Condition[] = [];
-  if (isNumericFilterActive(filter.columnFilters.index)) result.push({ key: 'index', kind: 'builtin', column: ColumnFilterKey.Index, label: '序号', summary: `${filter.columnFilters.index.min || '起点'} – ${filter.columnFilters.index.max || '末尾'}` });
-  if (filter.startTime || filter.endTime) result.push({ key: 'timestamp', kind: 'builtin', column: ColumnFilterKey.Timestamp, label: '时间', summary: `${filter.startTime || '最早'} → ${filter.endTime || '最晚'}` });
-  const levels = filter.selectedLevels.filter((value) => value !== FilterValue.All);
-  if (levels.length) result.push({ key: 'level', kind: 'builtin', column: ColumnFilterKey.Level, label: '级别', summary: levels.map((value) => value === FilterValue.FailedOnly ? '解析失败' : value).join('、') });
-  if (filter.selectedModule !== FilterValue.All) result.push({ key: 'module', kind: 'builtin', column: ColumnFilterKey.Module, label: '模块', summary: filter.selectedModule });
-  if (filter.selectedThread !== FilterValue.All) result.push({ key: 'thread', kind: 'builtin', column: ColumnFilterKey.ThreadId, label: '线程', summary: filter.selectedThread });
-  const entries: Array<[ColumnFilterKey, string, TextColumnFilter]> = [
-    [ColumnFilterKey.RequestId, '请求ID', filter.columnFilters.requestId],
-    [ColumnFilterKey.OperationDesc, '操作描述', filter.columnFilters.operationDesc],
-    [ColumnFilterKey.FunctionName, '函数名', filter.columnFilters.functionName],
-    [ColumnFilterKey.MemoryAddress, '内存地址', filter.columnFilters.memoryAddress],
-    [ColumnFilterKey.FileName, '文件名', filter.columnFilters.fileName],
-  ];
-  entries.forEach(([key, label, value]) => { const item = textCondition(value, key, label); if (item) result.push(item); });
-  if (filter.rangeKeyword) result.push({ key: 'range', kind: 'range', label: '首末区间', summary: filter.rangeKeyword });
-  return result;
-}
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchControlRef = useRef<HTMLDivElement>(null);
+  const counterBtnRef = useRef<HTMLButtonElement>(null);
+  const jumpInputRef = useRef<HTMLInputElement>(null);
+  const searchColBtnRef = useRef<HTMLButtonElement>(null);
+  const highlightBtnRef = useRef<HTMLButtonElement>(null);
+  const exportBtnRef = useRef<HTMLButtonElement>(null);
 
-export const Toolbar: React.FC<ToolbarProps> = (props) => {
-  const {
-    filter, onFilterChange, density, onDensityChange, columnVisibility, onColumnVisibilityChange,
-    filteredCount, uniqueModules, uniqueThreads, timeRange, onExportJSON, onExportCSV,
-    onCopyFilteredRaw, totalMatches, currentMatchIndex, onTriggerSearch, onNextMatch, onPrevMatch,
-    searchMode, onSearchModeChange, navigation, theme, borderIntensity = 'medium', onBorderIntensityChange,
-    onResetColumnWidths, onJumpToLine, legacyBoldSelection = false, onLegacyBoldSelectionChange,
-    legacyHighlightStyle = false, onLegacyHighlightStyleChange, showLegacyFilters = true, searchableFields,
-    configuredFilterItems = [], format, logs,
-  } = props;
-  const [menu, setMenu] = useState<Menu>(null);
-  const [editor, setEditor] = useState<Editor>(null);
-  const [jumpInput, setJumpInput] = useState('');
-  const [jumpError, setJumpError] = useState('');
-  const [copied, setCopied] = useState(false);
-  const [colorPin, setColorPin] = useState<string | null>(null);
-  const root = useRef<HTMLDivElement>(null);
-  const jumpRef = useRef<HTMLInputElement>(null);
-  const light = theme === 'light';
   const pins = filter.pinnedHighlights || [];
-  const conditions = useMemo(() => activeConditions(filter, showLegacyFilters, configuredFilterItems), [filter, showLegacyFilters, configuredFilterItems]);
-  const searchColumns = searchableFields ? [{ key: 'ALL', label: '全部列 / 原始文本' }, ...searchableFields] : searchBuiltinColumns;
+  const searchColumns = searchableFields
+    ? [{ key: 'ALL', label: '全部列 / 原始文本' }, ...searchableFields]
+    : searchBuiltinColumns;
   const selectedColumns = filter.searchColumns?.length ? filter.searchColumns : [filter.searchColumn || 'ALL'];
-  const searchColumnLabel = selectedColumns.includes('ALL') ? '全部列' : selectedColumns.length === 1 ? searchColumns.find((item) => item.key === selectedColumns[0])?.label || selectedColumns[0] : `${selectedColumns.length} 列`;
-  const invalidSearchRegex = searchMode === 'navigate' && filter.isRegex && filter.searchKeyword.trim() ? (() => { try { new RegExp(filter.searchKeyword); return false; } catch { return true; } })() : false;
-  const invalidHighlightRegex = searchMode === 'highlight' && filter.highlightIsRegex && filter.highlightKeyword.trim() ? (() => { try { new RegExp(filter.highlightKeyword); return false; } catch { return true; } })() : false;
-  const input = `h-8 rounded-md border bg-surface px-2 font-mono text-xs text-ink outline-none placeholder:text-ink-3 focus:border-accent ${light ? 'border-slate-300' : 'border-slate-700'}`;
-  const quietButton = 'lv-btn h-8 shrink-0 px-2';
-  const menuClass = 'lv-menu absolute top-full z-[100] mt-1.5 p-1.5';
+  const searchColumnLabel = selectedColumns.includes('ALL')
+    ? '全部列'
+    : selectedColumns.length === 1
+      ? searchColumns.find((item) => item.key === selectedColumns[0])?.label || selectedColumns[0]
+      : `${selectedColumns.length} 列`;
+
+  const trimmedKeyword = filter.searchKeyword.trim();
+  const invalidSearchRegex =
+    filter.isRegex && trimmedKeyword
+      ? (() => {
+          try {
+            new RegExp(trimmedKeyword);
+            return false;
+          } catch {
+            return true;
+          }
+        })()
+      : false;
+
+  const isDuplicatePin = Boolean(
+    trimmedKeyword &&
+      pins.some(
+        (pin) =>
+          pin.keyword === trimmedKeyword &&
+          Boolean(pin.isRegex) === Boolean(filter.isRegex) &&
+          Boolean(pin.matchCase) === Boolean(filter.matchCase),
+      ),
+  );
+  const canPinHighlight = Boolean(trimmedKeyword && !invalidSearchRegex && !isDuplicatePin);
+
+  const pinDisabledReason = !trimmedKeyword
+    ? '先在搜索框输入关键词，再固定高亮'
+    : invalidSearchRegex
+      ? '正则表达式无效，请修正后再固定高亮'
+      : isDuplicatePin
+        ? '相同关键词与匹配规则已在高亮列表中'
+        : '将当前关键词加入永久高亮标注';
+
+  const closeMenu = () => {
+    setMenuState({ kind: null, anchor: null });
+    setColorPinId(null);
+  };
+
+  const toggleMenu = (kind: Exclude<ToolbarMenuKind, null>, el: HTMLElement | null) => {
+    if (kind === 'export') {
+      setCopyScope(selectedCount > 0 ? CopyScope.Selected : CopyScope.Filtered);
+    }
+    setMenuState((prev) =>
+      prev.kind === kind ? { kind: null, anchor: null } : { kind, anchor: el?.getBoundingClientRect() || null },
+    );
+    setColorPinId(null);
+  };
 
   useEffect(() => {
-    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) { setMenu(null); setColorPin(null); } };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setMenu(null); setEditor(null); setColorPin(null); }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g') { event.preventDefault(); jumpRef.current?.focus(); }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && logs.length) {
-        event.preventDefault(); setMenu(null); onSearchModeChange('navigate'); document.getElementById('log-investigation-search')?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && logs.length > 0) {
+        event.preventDefault();
+        closeMenu();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
       }
     };
-    document.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', key);
-    return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', key); };
-  }, [logs.length, onSearchModeChange]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [logs.length]);
 
-  const openBuiltin = (key: ColumnFilterKey, target: HTMLElement) => { setEditor({ kind: 'builtin', key, anchor: target.getBoundingClientRect() }); setMenu(null); };
-  const openConfigured = (field: LogFieldConfig, target: HTMLElement) => { setEditor({ kind: 'configured', field, anchor: target.getBoundingClientRect() }); setMenu(null); };
+  useEffect(() => {
+    if (copiedBanner === null) return;
+    const timer = window.setTimeout(() => setCopiedBanner(null), TooltipConst.ExportCopyFeedbackMs);
+    return () => window.clearTimeout(timer);
+  }, [copiedBanner]);
+
   const toggleSearchColumn = (key: string) => {
-    if (key === 'ALL') { onFilterChange({ searchColumns: ['ALL'], searchColumn: 'ALL' }); return; }
+    if (key === 'ALL') {
+      onFilterChange({ searchColumns: ['ALL'], searchColumn: 'ALL' });
+      return;
+    }
     let next = selectedColumns.filter((item) => item !== 'ALL');
     next = next.includes(key) ? next.filter((item) => item !== key) : [...next, key];
     if (!next.length) next = ['ALL'];
     onFilterChange({ searchColumns: next, searchColumn: next.length === 1 ? next[0] : 'ALL' });
   };
+
   const pinHighlight = () => {
-    const keyword = filter.highlightKeyword.trim();
-    if (!keyword || invalidHighlightRegex) return;
-    if (pins.some((pin) => pin.keyword === keyword)) return;
-    const pin: PinnedHighlight = { id: `${Date.now()}-${Math.random()}`, keyword, color: HIGHLIGHT_COLOR_PRESETS[pins.length % HIGHLIGHT_COLOR_PRESETS.length].id, matchCase: filter.highlightMatchCase, isRegex: filter.highlightIsRegex };
-    onFilterChange({ pinnedHighlights: [...pins, pin], highlightKeyword: '' });
+    if (!canPinHighlight) return;
+    const preset = HIGHLIGHT_COLOR_PRESETS[pins.length % HIGHLIGHT_COLOR_PRESETS.length];
+    const nextPin: PinnedHighlight = {
+      id: `${Date.now()}-${Math.random()}`,
+      keyword: trimmedKeyword,
+      color: preset.id,
+      matchCase: filter.matchCase,
+      isRegex: filter.isRegex,
+      hidden: false,
+    };
+    onFilterChange({ pinnedHighlights: [...pins, nextPin] });
   };
-  const copyFiltered = () => {
-    onCopyFilteredRaw(); setCopied(true); setMenu(null); window.setTimeout(() => setCopied(false), 1600);
+
+  const handleCopyAction = async (format: 'raw' | 'json') => {
+    const count = await Promise.resolve(onCopyScope(copyScope, format));
+    closeMenu();
+    if (count > 0) setCopiedBanner(count);
   };
-  const submitJump = (event: React.FormEvent) => {
-    event.preventDefault();
-    const line = Number(jumpInput);
-    if (!Number.isInteger(line) || line < 1) { setJumpError('请输入有效行号'); return; }
-    setJumpError(''); onJumpToLine?.(line);
+
+  const scopeCount = (scope: CopyScope): number =>
+    scope === CopyScope.Selected ? selectedCount : scope === CopyScope.Filtered ? filteredCount : totalCount;
+
+  const activeScopeCount = scopeCount(copyScope);
+  const defaultScope = selectedCount > 0 ? CopyScope.Selected : CopyScope.Filtered;
+  const defaultScopeCount = scopeCount(defaultScope);
+  const defaultScopeLabel = defaultScope === CopyScope.Selected ? '选中' : '筛选结果';
+
+  const activeOrdinal = totalMatches > 0 ? Math.min(currentMatchIndex + 1, totalMatches) : 0;
+  const matchCounterText = totalMatches > 0
+    ? `${activeOrdinal}/${totalMatches}`
+    : '0/0';
+  const searchMiddleAriaLabel = !searchActive
+    ? '搜索'
+    : totalMatches === 0
+      ? '没有匹配结果 0/0，点击重新搜索'
+      : `当前匹配 ${matchCounterText}，点击按序号跳转`;
+  const navDisabled = !trimmedKeyword || invalidSearchRegex;
+  const isNoMatchActive = searchActive && totalMatches === 0;
+  const canEditCounter = searchActive && totalMatches > 0 && !navDisabled;
+  const ordinalInputWidth = `${Math.min(Math.max(String(totalMatches).length + 1.5, 3.2), 6.5)}ch`;
+
+  useEffect(() => {
+    if (!searchActive || totalMatches === 0 || navDisabled) {
+      setEditingJump(false);
+      setJumpError(null);
+    } else {
+      setJumpError(null);
+    }
+  }, [searchActive, totalMatches, navDisabled]);
+
+  useEffect(() => {
+    if (!editingJump) return;
+    const input = jumpInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [editingJump]);
+
+  useLayoutEffect(() => {
+    if (!editingJump || !jumpError || !searchControlRef.current) {
+      setJumpErrorPos(null);
+      return;
+    }
+    const rect = searchControlRef.current.getBoundingClientRect();
+    const pad = MenuLayerConst.ViewportMarginPx;
+    setJumpErrorPos({
+      left: Math.max(pad, Math.min(rect.left, window.innerWidth - 220)),
+      top: rect.bottom + MenuLayerConst.GapPx,
+    });
+  }, [editingJump, jumpError, jumpDraft, totalMatches]);
+
+  const openJumpInput = () => {
+    if (!canEditCounter) return;
+    setJumpDraft(String(activeOrdinal));
+    setJumpError(null);
+    setEditingJump(true);
   };
-  const currentValue = searchMode === 'navigate' ? filter.searchKeyword : filter.highlightKeyword;
-  const setCurrentValue = (value: string) => onFilterChange(searchMode === 'navigate' ? { searchKeyword: value } : { highlightKeyword: value });
+
+  const cancelJumpInput = (restoreFocus = false) => {
+    setEditingJump(false);
+    setJumpError(null);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => counterBtnRef.current?.focus());
+    }
+  };
+
+  const commitJumpInput = () => {
+    const parsed = OrdinalJump.parse(jumpDraft, totalMatches);
+    if (!parsed.ok) {
+      setJumpError(parsed.error);
+      jumpInputRef.current?.focus();
+      return;
+    }
+    setJumpError(null);
+    setEditingJump(false);
+    onJumpToMatch?.(parsed.ordinal);
+    window.requestAnimationFrame(() => counterBtnRef.current?.focus());
+  };
+
+  const searchNavBaseCls =
+    'flex h-full items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:bg-raised/70 disabled:text-ink-3';
+  const searchNavBtnCls =
+    `${searchNavBaseCls} text-accent-ink hover:bg-accent/15 focus-visible:ring-accent dark:hover:bg-accent/25`;
+  const highlightSegBtnCls =
+    'inline-flex h-full items-center text-[#0f6b43] transition-colors hover:bg-ok/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ok dark:text-[#7ee3b6] dark:hover:bg-ok/20';
 
   return (
-    <div ref={root} className="relative z-40 shrink-0 border-b border-line bg-surface px-2 py-1.5 text-xs text-ink-2 sm:px-3" aria-label="日志调查栏">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <div className="flex min-w-[300px] flex-1 flex-wrap items-center gap-1.5 sm:flex-nowrap">
-          <div className="relative flex h-8 shrink-0 rounded-md border border-line bg-raised p-0.5" aria-label="搜索用途">
-            <button type="button" aria-pressed={searchMode === 'navigate'} onClick={() => { setMenu(null); onSearchModeChange('navigate'); }} className={`flex items-center gap-1 rounded px-2 font-medium ${searchMode === 'navigate' ? 'bg-surface text-accent-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}><Search className="h-3.5 w-3.5" />定位</button>
-            <button type="button" aria-pressed={searchMode === 'highlight'} aria-expanded={searchMode === 'highlight' && menu === 'highlights'} title={searchMode === 'highlight' ? '打开高亮列表' : '切换到高亮模式'} onClick={() => { if (searchMode === 'highlight') setMenu(menu === 'highlights' ? null : 'highlights'); else { setMenu(null); onSearchModeChange('highlight'); } }} className={`flex items-center gap-1 rounded px-2 font-medium ${searchMode === 'highlight' ? 'bg-surface text-accent-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}><Highlighter className="h-3.5 w-3.5" />高亮{searchMode === 'highlight' ? <ChevronDown className="h-3 w-3" /> : null}</button>
-            {searchMode === 'highlight' && menu === 'highlights' ? <div className={`${menuClass} left-0 w-80 max-w-[calc(100vw-24px)]`} aria-label="高亮列表">
-              <div className="flex items-center justify-between px-2 py-1"><p className="font-semibold text-ink-2">固定高亮 · {pins.length}</p>{pins.length ? <button type="button" className="text-[10px] text-ink-3 hover:text-danger" onClick={() => { onFilterChange({ pinnedHighlights: [] }); setColorPin(null); }}>清除全部</button> : null}</div>
-              {pins.length ? <div className="max-h-64 overflow-auto">{pins.map((pin) => {
-                const preset = HIGHLIGHT_COLOR_PRESETS.find((item) => item.id === pin.color) || HIGHLIGHT_COLOR_PRESETS[0];
-                return <div key={pin.id} className="relative flex min-h-8 items-center gap-2 rounded px-2 py-1 hover:bg-raised"><button type="button" className={`h-3.5 w-3.5 shrink-0 rounded-full ${preset.bgDot}`} onClick={() => setColorPin(colorPin === pin.id ? null : pin.id)} aria-label={`调整高亮 ${pin.keyword} 的颜色`} /><span className="min-w-0 flex-1 truncate font-mono" title={pin.keyword}>{pin.keyword}</span>{pin.isRegex ? <span className="text-[9px] text-ink-3">.*</span> : null}<button type="button" className="lv-icon-btn h-6 w-6" onClick={() => onFilterChange({ pinnedHighlights: pins.filter((item) => item.id !== pin.id) })} aria-label={`移除高亮 ${pin.keyword}`}><X className="h-3.5 w-3.5" /></button>{colorPin === pin.id ? <span className="lv-menu absolute left-2 top-full z-[110] mt-1 flex gap-1 p-2">{HIGHLIGHT_COLOR_PRESETS.map((color) => <button key={color.id} type="button" title={color.name} aria-label={`使用${color.name}`} className={`h-5 w-5 rounded-full ${color.bgDot} ${pin.color === color.id ? 'ring-2 ring-accent' : ''}`} onClick={() => { onFilterChange({ pinnedHighlights: pins.map((item) => item.id === pin.id ? { ...item, color: color.id } : item) }); setColorPin(null); }} />)}</span> : null}</div>;
-              })}</div> : <p className="px-2 py-3 text-[11px] text-ink-3">尚无固定高亮。输入文本后按 Enter 固定。</p>}
-            </div> : null}
-          </div>
-          <div className={`relative flex h-8 min-w-0 flex-1 basis-full items-center rounded-md border bg-surface px-2 focus-within:border-accent sm:basis-auto ${invalidSearchRegex || invalidHighlightRegex ? 'border-danger' : 'border-line'}`}>
-            {searchMode === 'navigate' ? <div className="relative mr-1 shrink-0">
-              <button type="button" onClick={() => setMenu(menu === 'searchColumns' ? null : 'searchColumns')} className="flex max-w-28 items-center gap-1 rounded px-1 py-0.5 text-[11px] text-ink-2 hover:bg-raised" title="搜索匹配目标列（多选）"><span className="truncate">{searchColumnLabel}</span><ChevronDown className="h-3 w-3" /></button>
-              {menu === 'searchColumns' ? <div className={`${menuClass} left-0 max-h-64 w-56 overflow-auto`}><p className="px-2 py-1 text-[10px] font-semibold text-ink-3">定位范围 · 不改变日志结果</p>{searchColumns.map((column) => <label key={column.key} className="flex cursor-pointer items-center justify-between rounded px-2 py-1.5 hover:bg-raised"><span>{column.label}</span><input type="checkbox" className="accent-indigo-600" checked={selectedColumns.includes(column.key)} onChange={() => toggleSearchColumn(column.key)} /></label>)}</div> : null}
-            </div> : null}
-            <input id="log-investigation-search" aria-label={searchMode === 'navigate' ? '定位日志' : '高亮日志'} value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (searchMode === 'navigate') onTriggerSearch(); else pinHighlight(); } }} placeholder={searchMode === 'navigate' ? '在当前筛选结果中定位…' : '高亮匹配文本，Enter 固定…'} className="min-w-0 flex-1 bg-transparent font-mono text-xs text-ink outline-none placeholder:text-ink-3" />
-            {currentValue ? <button type="button" className="lv-icon-btn h-6 w-6" onClick={() => setCurrentValue('')} aria-label="清空当前搜索"><X className="h-3.5 w-3.5" /></button> : null}
-            <button type="button" aria-pressed={searchMode === 'navigate' ? filter.isRegex : filter.highlightIsRegex} onClick={() => onFilterChange(searchMode === 'navigate' ? { isRegex: !filter.isRegex } : { highlightIsRegex: !filter.highlightIsRegex })} className={`rounded border px-1 py-0.5 font-mono text-[10px] ${(searchMode === 'navigate' ? filter.isRegex : filter.highlightIsRegex) ? 'border-accent bg-accent-soft text-accent-ink' : 'border-transparent text-ink-3'}`} title="正则表达式">.*</button>
-            <button type="button" aria-pressed={searchMode === 'navigate' ? filter.matchCase : filter.highlightMatchCase} onClick={() => onFilterChange(searchMode === 'navigate' ? { matchCase: !filter.matchCase } : { highlightMatchCase: !filter.highlightMatchCase })} className={`mr-1 rounded border px-1 py-0.5 font-mono text-[10px] ${(searchMode === 'navigate' ? filter.matchCase : filter.highlightMatchCase) ? 'border-accent bg-accent-soft text-accent-ink' : 'border-transparent text-ink-3'}`} title="区分大小写">Aa</button>
-            {searchMode === 'navigate' ? <>
-              <button type="button" onClick={onTriggerSearch} disabled={!filter.searchKeyword.trim() || invalidSearchRegex} className="lv-btn lv-btn-primary h-6 px-2 text-[11px]">定位</button>
-              <button type="button" onClick={onPrevMatch} disabled={!totalMatches} className="lv-icon-btn ml-1 h-6 w-6" aria-label="上一条匹配"><ChevronUp className="h-3.5 w-3.5" /></button>
-              <span className="min-w-12 text-center font-mono text-[10px] tabular-nums text-accent-ink" aria-label="匹配位置">{totalMatches ? `${Math.min(currentMatchIndex + 1, totalMatches)}/${totalMatches}` : '0/0'}</span>
-              <button type="button" onClick={onNextMatch} disabled={!totalMatches} className="lv-icon-btn h-6 w-6" aria-label="下一条匹配"><ChevronDown className="h-3.5 w-3.5" /></button>
-            </> : <button type="button" onClick={pinHighlight} disabled={!filter.highlightKeyword.trim() || invalidHighlightRegex || pins.some((pin) => pin.keyword === filter.highlightKeyword.trim())} className="flex h-6 items-center gap-1 rounded bg-accent px-2 text-[11px] font-medium text-white disabled:opacity-40"><Pin className="h-3 w-3" />固定</button>}
-          </div>
+    <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5 text-xs text-ink-2" aria-label="日志调查栏">
+      {/* 搜索输入 + 搜索控制 + 高亮分裂按钮 连续组合 */}
+      <div
+        className={`relative flex h-8 min-w-[280px] flex-1 basis-full items-stretch overflow-hidden rounded-md border bg-raised shadow-xs transition-colors focus-within:border-accent sm:max-w-[740px] sm:basis-auto ${
+          invalidSearchRegex ? 'border-danger' : 'border-line-strong'
+        }`}
+      >
+        {/* 搜索输入段 */}
+        <div className="flex h-full min-w-[130px] flex-1 items-center bg-surface px-1.5">
+          {/* 列范围选择 */}
+          <Tooltip text="搜索匹配目标列（不改变当前筛选结果）">
+            <button
+              ref={searchColBtnRef}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={menuState.kind === 'searchColumns'}
+              onClick={() => toggleMenu('searchColumns', searchColBtnRef.current)}
+              className="mr-1 flex h-6 max-w-28 shrink-0 items-center gap-1 rounded bg-raised px-1.5 text-[11px] font-medium text-ink transition-colors hover:bg-sunken"
+            >
+              <span className="truncate">{searchColumnLabel}</span>
+              <ChevronDown className="h-3 w-3 shrink-0 text-ink-2" />
+            </button>
+          </Tooltip>
+
+          <span className="mr-1.5 h-4 w-px shrink-0 bg-line-strong" aria-hidden="true" />
+
+          <input
+            ref={searchInputRef}
+            id="log-investigation-search"
+            aria-label="在当前筛选结果中搜索"
+            value={filter.searchKeyword}
+            onChange={(event) => onFilterChange({ searchKeyword: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === UiShortcutKey.Enter) {
+                event.preventDefault();
+                if (navDisabled) return;
+                if (event.shiftKey) onPrevMatch();
+                else if (!searchActive) onTriggerSearch();
+                else onNextMatch();
+              }
+            }}
+            placeholder="在当前筛选结果中搜索…"
+            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-ink outline-none placeholder:text-ink-3"
+          />
+
+          {filter.searchKeyword ? (
+            <Tooltip text="清空搜索词">
+              <button
+                type="button"
+                className="lv-icon-btn h-6 w-6 shrink-0 text-ink-2"
+                onClick={() => onFilterChange({ searchKeyword: '' })}
+                aria-label="清空当前搜索"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </Tooltip>
+          ) : null}
+
+          <Tooltip text="正则表达式匹配">
+            <button
+              type="button"
+              aria-pressed={filter.isRegex}
+              onClick={() => onFilterChange({ isRegex: !filter.isRegex })}
+              className={`ml-0.5 rounded border px-1 py-0.5 font-mono text-[10px] font-medium transition-colors ${
+                filter.isRegex
+                  ? 'border-accent bg-accent-soft text-accent-ink'
+                  : 'border-transparent text-ink-2 hover:bg-raised hover:text-ink'
+              }`}
+            >
+              .*
+            </button>
+          </Tooltip>
+
+          <Tooltip text="区分大小写">
+            <button
+              type="button"
+              aria-pressed={filter.matchCase}
+              onClick={() => onFilterChange({ matchCase: !filter.matchCase })}
+              className={`ml-0.5 rounded border px-1 py-0.5 font-mono text-[10px] font-medium transition-colors ${
+                filter.matchCase
+                  ? 'border-accent bg-accent-soft text-accent-ink'
+                  : 'border-transparent text-ink-2 hover:bg-raised hover:text-ink'
+              }`}
+            >
+              Aa
+            </button>
+          </Tooltip>
         </div>
 
-        <div className="relative">
-          <button type="button" onClick={() => setMenu(menu === 'add' ? null : 'add')} className={`${quietButton} ${conditions.length ? '!border-accent/40 !bg-accent-soft !text-accent-ink' : ''}`} aria-expanded={menu === 'add'}><Plus className="h-3.5 w-3.5" />添加条件{conditions.length ? <span className="rounded bg-accent px-1 font-mono text-[10px] text-white">{conditions.length}</span> : null}</button>
-          {menu === 'add' ? <div className={`${menuClass} left-0 grid w-64 grid-cols-2 gap-0.5`}>
-            <p className="col-span-2 px-2 py-1 text-[10px] font-semibold text-ink-3">缩小日志范围 · 条件之间为 AND</p>
-            {showLegacyFilters ? builtinFilters.map((item) => <button key={item.key} type="button" className="lv-menu-item" onClick={(event) => openBuiltin(item.key, event.currentTarget)}><Filter className="h-3.5 w-3.5" />{item.label}</button>) : format.fields.filter((field) => field.filter.kind !== FieldFilterKind.None).map((field) => <button key={field.id} type="button" className="lv-menu-item" onClick={(event) => openConfigured(field, event.currentTarget)}><Filter className="h-3.5 w-3.5" />{field.label}</button>)}
-            <button type="button" className="lv-menu-item col-span-2" onClick={() => setMenu('range')}><ListFilter className="h-3.5 w-3.5" />首个至末个匹配区间</button>
-          </div> : null}
-          {menu === 'range' ? <div className={`${menuClass} left-0 w-80 p-3`}><div className="mb-2 flex items-center justify-between"><strong>首末匹配区间</strong><button type="button" className="lv-icon-btn h-6 w-6" onClick={() => setMenu(null)} aria-label="关闭区间筛选"><X className="h-3.5 w-3.5" /></button></div><p className="mb-2 text-[11px] leading-relaxed text-ink-3">仅保留关键词第一次出现至最后一次出现之间的记录。</p><input autoFocus value={filter.rangeKeyword} onChange={(event) => onFilterChange({ rangeKeyword: event.target.value })} className={`${input} w-full`} placeholder="区间关键字" /><div className="mt-2 flex justify-end"><button type="button" className="text-[11px] text-danger" onClick={() => onFilterChange({ rangeKeyword: '' })}>清空区间</button></div></div> : null}
+        {/* [ ▲ | 🔍 搜索 / (n/M) | ▼ ] 钴蓝主题搜索控制段（撑满分组高度） */}
+        <div
+          ref={searchControlRef}
+          className="inline-flex h-full shrink-0 items-stretch border-l border-line-strong bg-accent-soft text-accent-ink"
+        >
+          <Tooltip text="上一条匹配（从当前视口向上查找）" kbd="Shift+Enter" className="inline-flex h-full">
+            <button
+              type="button"
+              disabled={navDisabled}
+              onClick={() => {
+                if (editingJump) cancelJumpInput();
+                onPrevMatch();
+              }}
+              aria-label="上一条匹配"
+              className={`${searchNavBtnCls} w-6 border-r border-accent/20 dark:border-accent/25`}
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+
+          {editingJump && canEditCounter ? (
+            <div className="flex h-full items-center gap-1 bg-accent-soft px-2">
+              <Search className="h-3.5 w-3.5 shrink-0 text-accent-ink/80" aria-hidden="true" />
+              <input
+                ref={jumpInputRef}
+                type="text"
+                inputMode="numeric"
+                value={jumpDraft}
+                style={{ width: ordinalInputWidth }}
+                onChange={(event) => {
+                  setJumpDraft(event.target.value);
+                  if (jumpError) setJumpError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === UiShortcutKey.Enter) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    commitJumpInput();
+                  } else if (event.key === UiShortcutKey.Escape) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    cancelJumpInput(true);
+                  }
+                }}
+                onBlur={(event) => {
+                  if (!searchControlRef.current?.contains(event.relatedTarget as Node | null)) {
+                    cancelJumpInput();
+                  }
+                }}
+                aria-label="跳转到第几条匹配（按 Enter 确认）"
+                aria-invalid={Boolean(jumpError)}
+                className={`h-[22px] min-w-[2.25rem] rounded border bg-surface px-1 text-center font-mono text-[11px] font-semibold tabular-nums text-ink outline-none transition-colors ${
+                  jumpError
+                    ? 'border-danger ring-2 ring-danger/25'
+                    : 'border-accent/65 focus:border-accent focus:ring-2 focus:ring-accent/20'
+                }`}
+              />
+              <span className="font-mono text-[11px] font-semibold tabular-nums whitespace-nowrap text-accent-ink/80">
+                /{totalMatches}
+              </span>
+            </div>
+          ) : (
+            <Tooltip
+              text={
+                !searchActive
+                  ? '从当前可见首行向下搜索（Enter）'
+                  : totalMatches === 0
+                    ? '当前筛选结果中没有匹配项'
+                    : `当前第 ${activeOrdinal} 条（共 ${totalMatches} 条），点击输入序号跳转`
+              }
+              className="inline-flex h-full"
+            >
+              <button
+                ref={counterBtnRef}
+                type="button"
+                disabled={navDisabled}
+                aria-label={searchMiddleAriaLabel}
+                onClick={() => (!searchActive || totalMatches === 0 ? onTriggerSearch() : openJumpInput())}
+                className={
+                  isNoMatchActive
+                    ? `${searchNavBaseCls} min-w-[60px] gap-1 px-2 bg-danger-soft/85 text-danger hover:bg-danger/15 focus-visible:ring-danger dark:hover:bg-danger/20`
+                    : `${searchNavBtnCls} ${!searchActive ? 'gap-1.5 px-2.5' : 'min-w-[60px] gap-1 px-2'}`
+                }
+              >
+                <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {searchActive ? (
+                  <span className="font-mono text-[11px] font-semibold tabular-nums whitespace-nowrap">
+                    {matchCounterText}
+                  </span>
+                ) : (
+                  <span className="font-sans text-[12px] font-medium whitespace-nowrap">搜索</span>
+                )}
+              </button>
+            </Tooltip>
+          )}
+
+          <Tooltip text="下一条匹配（从当前视口向下查找）" kbd="Enter" className="inline-flex h-full">
+            <button
+              type="button"
+              disabled={navDisabled}
+              onClick={() => {
+                if (editingJump) cancelJumpInput();
+                if (!searchActive) onTriggerSearch();
+                else onNextMatch();
+              }}
+              aria-label="下一条匹配"
+              className={`${searchNavBtnCls} w-6 border-l border-accent/20 dark:border-accent/25`}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
         </div>
 
-        {showLegacyFilters ? <DateRangeFilter filter={filter} isOpen={menu === 'columns'} onOpenChange={(open) => setMenu(open ? 'columns' : null)} onFilterChange={onFilterChange} timeRange={timeRange} theme={theme} /> : null}
-        <form onSubmit={submitJump} className="relative flex h-8 items-center gap-1" title="跳转到筛选结果中的行（Ctrl+G）"><Hash className="h-3.5 w-3.5 text-ink-3" /><input ref={jumpRef} aria-label="跳转行" type="number" min="1" value={jumpInput} onChange={(event) => { setJumpInput(event.target.value); setJumpError(''); }} placeholder={`1–${filteredCount}`} className={`${input} w-20`} /><button type="submit" className={quietButton}>跳转</button>{jumpError ? <span role="alert" className="absolute left-4 top-full z-[110] mt-1 whitespace-nowrap rounded-md border border-danger/30 bg-surface px-2 py-1 text-[10px] text-danger shadow-lg">{jumpError}</span> : null}</form>
-
-        <div className="relative ml-auto">
-          <button type="button" className={quietButton} onClick={() => setMenu(menu === 'view' ? null : 'view')} aria-label="视图设置" aria-expanded={menu === 'view'}><SlidersHorizontal className="h-3.5 w-3.5" /><span className="hidden xl:inline">视图</span></button>
-          {menu === 'view' ? <div className={`${menuClass} right-0 w-72 p-3`}>
-            <p className="mb-1.5 text-[10px] font-semibold text-ink-3">行密度</p><div className="grid grid-cols-3 gap-1">{([['compact', '紧凑'], ['normal', '标准'], ['relaxed', '宽敞']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => onDensityChange(value)} className={`rounded border px-2 py-1.5 ${density === value ? 'border-accent bg-accent-soft text-accent-ink' : 'border-line hover:bg-raised'}`}>{label}</button>)}</div>
-            <label className="mt-3 flex cursor-pointer items-center justify-between rounded px-1 py-1.5 hover:bg-raised"><span className="flex items-center gap-1.5"><WrapText className="h-3.5 w-3.5" />自动换行</span><input type="checkbox" className="accent-indigo-600" checked={filter.wordWrap} onChange={(event) => onFilterChange({ wordWrap: event.target.checked })} /></label>
-            {showLegacyFilters ? <>
-              <p className="mb-1.5 mt-2 text-[10px] font-semibold text-ink-3">表格网格线</p><div className="grid grid-cols-3 gap-1">{(['light', 'medium', 'strong'] as const).map((value) => <button key={value} type="button" onClick={() => onBorderIntensityChange?.(value)} className={`rounded border px-2 py-1.5 ${borderIntensity === value ? 'border-accent bg-accent-soft text-accent-ink' : 'border-line hover:bg-raised'}`}>{value === 'light' ? '弱' : value === 'medium' ? '中' : '强'}</button>)}</div>
-              <div className="my-2 h-px bg-line" /><p className="mb-1 text-[10px] font-semibold text-ink-3">数据列</p><div className="grid max-h-44 grid-cols-2 gap-0.5 overflow-auto">{columnLabels.map(({ key, label }) => <label key={key} className="flex cursor-pointer items-center justify-between rounded px-2 py-1 hover:bg-raised"><span>{label}</span><input type="checkbox" className="accent-indigo-600" checked={columnVisibility[key]} onChange={(event) => onColumnVisibilityChange({ ...columnVisibility, [key]: event.target.checked })} /></label>)}</div>
-              <label className="mt-2 flex items-center justify-between border-t border-line px-1 pt-2"><span>经典选中加粗</span><input type="checkbox" className="accent-indigo-600" checked={legacyBoldSelection} onChange={(event) => onLegacyBoldSelectionChange?.(event.target.checked)} /></label>
-              <label className="mt-1 flex items-center justify-between px-1"><span>经典高亮边框</span><input type="checkbox" className="accent-indigo-600" checked={legacyHighlightStyle} onChange={(event) => onLegacyHighlightStyleChange?.(event.target.checked)} /></label>
-            </> : null}
-            <button type="button" className="lv-btn mt-2 w-full" onClick={onResetColumnWidths}>重置默认列宽</button>
-            <button type="button" className="lv-btn mt-1.5 w-full justify-between" onClick={() => { setMenu(null); props.onOpenInvestigationViews(); }}><span>调查视图</span><span className="text-[10px] text-ink-3">保存 / 恢复</span></button>
-          </div> : null}
+        {/* [ 🖍 高亮 | ▾ ] 翡翠绿主题高亮分裂段（撑满分组高度） */}
+        <div className="inline-flex h-full shrink-0 items-stretch border-l border-line-strong bg-ok-soft text-[#0f6b43] dark:text-[#7ee3b6]">
+          <Tooltip text={pinDisabledReason} className="inline-flex h-full">
+            <button
+              type="button"
+              disabled={!canPinHighlight}
+              onClick={pinHighlight}
+              className={`group ${highlightSegBtnCls} gap-1.5 px-2.5 text-[12px] font-medium whitespace-nowrap disabled:pointer-events-none disabled:bg-raised/70 disabled:text-ink-3`}
+            >
+              <Highlighter className="h-3.5 w-3.5 shrink-0" />
+              <span>高亮</span>
+              {pins.length > 0 ? (
+                <span className="rounded bg-ok/15 px-1 font-mono text-[10px] font-semibold tabular-nums text-[#0f6b43] group-disabled:bg-sunken group-disabled:text-ink-3 dark:bg-ok/25 dark:text-[#96ecc6]">
+                  {pins.length}
+                </span>
+              ) : null}
+            </button>
+          </Tooltip>
+          <Tooltip text="管理永久高亮列表" className="inline-flex h-full">
+            <button
+              ref={highlightBtnRef}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={menuState.kind === 'highlights'}
+              aria-label="高亮列表"
+              onClick={() => toggleMenu('highlights', highlightBtnRef.current)}
+              className={`${highlightSegBtnCls} justify-center border-l border-ok/25 px-1.5 dark:border-ok/30`}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
         </div>
-        <div className="relative">
-          <button type="button" className={quietButton} disabled={!filteredCount} onClick={() => setMenu(menu === 'export' ? null : 'export')} aria-expanded={menu === 'export'} title={`复制或导出当前筛选结果 ${filteredCount.toLocaleString()} 条`}>{copied ? <Check className="h-3.5 w-3.5 text-ok" /> : <Copy className="h-3.5 w-3.5" />}<span className="hidden xl:inline">{copied ? '已复制' : '复制 / 导出'}</span><ChevronDown className="h-3 w-3" /></button>
-          {menu === 'export' ? <div role="menu" className={`${menuClass} right-0 w-56`}><p className="px-2 py-1 text-[10px] text-ink-3">当前筛选结果 · {filteredCount.toLocaleString()} 条</p><button type="button" role="menuitem" className="lv-menu-item" onClick={copyFiltered}><Copy className="h-3.5 w-3.5" />复制结果原文</button><button type="button" role="menuitem" className="lv-menu-item" onClick={() => { onExportCSV(); setMenu(null); }}><Download className="h-3.5 w-3.5" />导出 CSV<span className="ml-auto font-mono text-[10px]">.csv</span></button><button type="button" role="menuitem" className="lv-menu-item" onClick={() => { onExportJSON(); setMenu(null); }}><Download className="h-3.5 w-3.5" />导出 JSON<span className="ml-auto font-mono text-[10px]">.json</span></button></div> : null}
-        </div>
-        {navigation}
       </div>
-      {invalidSearchRegex || invalidHighlightRegex ? <p role="alert" className="absolute left-3 top-full z-[110] mt-1 rounded-md border border-danger/30 bg-surface px-2 py-1 text-[11px] text-danger shadow-lg">正则表达式无效，请修正后再{searchMode === 'navigate' ? '定位' : '固定高亮'}。</p> : null}
 
-      {editor?.kind === 'builtin' ? <ColumnFilterPopover column={editor.key} anchor={editor.anchor} filter={filter} options={editor.key === ColumnFilterKey.Level ? ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL', FilterValue.FailedOnly] : editor.key === ColumnFilterKey.Module ? uniqueModules : editor.key === ColumnFilterKey.ThreadId ? uniqueThreads : []} timeRange={timeRange} theme={theme} onFilterChange={onFilterChange} onClose={() => setEditor(null)} /> : null}
-      {editor?.kind === 'configured' ? <ConfiguredFieldFilterPopover field={editor.field} filter={filter.configuredFilters[editor.field.id]} options={distinctFieldValues(logs, editor.field.id)} anchor={editor.anchor} theme={theme} onApply={(next: RuntimeFieldFilter) => onFilterChange({ configuredFilters: { ...filter.configuredFilters, [editor.field.id]: next } })} onClose={() => setEditor(null)} /> : null}
+      {invalidSearchRegex ? (
+        <span role="alert" className="text-[11px] font-medium text-danger">
+          正则语法错误
+        </span>
+      ) : null}
+
+      <span className="flex-1" />
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {/* T14 统一复制 / 导出 ▾ */}
+        <Tooltip
+          text={
+            copiedBanner !== null
+              ? `已复制到剪贴板（${copiedBanner.toLocaleString()} 条）`
+              : `复制或导出日志（默认作用范围：${defaultScopeLabel} ${defaultScopeCount.toLocaleString()} 条）`
+          }
+        >
+          <button
+            ref={exportBtnRef}
+            type="button"
+            disabled={totalCount === 0}
+            aria-haspopup="menu"
+            aria-expanded={menuState.kind === 'export'}
+            onClick={() => toggleMenu('export', exportBtnRef.current)}
+            className={`lv-btn h-8 shrink-0 px-2.5 ${
+              copiedBanner !== null
+                ? '!border-ok/40 !bg-ok-soft !text-ok'
+                : '!border-line-strong !bg-raised !text-ink hover:!bg-sunken'
+            }`}
+          >
+            {copiedBanner !== null ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copiedBanner !== null ? `已复制 ${copiedBanner.toLocaleString()} 条` : '复制 / 导出'}</span>
+            <ChevronDown className="h-3.5 w-3.5 text-ink-2" />
+          </button>
+        </Tooltip>
+
+        {/* AI 工作区切换（已打开日志时位于调查工具栏右侧） */}
+        <Tooltip text="AI 工作区：结合日志上下文提问与排查">
+          <button
+            type="button"
+            onClick={onOpenAi}
+            aria-pressed={aiOpen}
+            aria-label="AI 工作区"
+            className={`lv-btn h-8 shrink-0 px-2.5 ${
+              aiOpen
+                ? '!border-accent !bg-accent-soft !text-accent-ink'
+                : '!border-line-strong !bg-raised !text-ink hover:!bg-sunken'
+            }`}
+          >
+            <Bot className="h-3.5 w-3.5" />
+            <span>AI</span>
+          </button>
+        </Tooltip>
+      </div>
+
+      {/* Portal: 搜索目标列菜单 */}
+      <Menu
+        open={menuState.kind === 'searchColumns'}
+        anchor={menuState.anchor}
+        onClose={closeMenu}
+        label="选择搜索列"
+        className="w-56"
+      >
+        <p className="px-2 py-1 text-[10px] font-semibold text-ink-3">搜索范围 · 不改变当前列表</p>
+        {searchColumns.map((column) => (
+          <label
+            key={column.key}
+            className="flex cursor-pointer items-center justify-between rounded px-2 py-1.5 text-xs text-ink hover:bg-raised"
+          >
+            <span className="truncate">{column.label}</span>
+            <input
+              type="checkbox"
+              className="accent-indigo-600"
+              checked={selectedColumns.includes(column.key)}
+              onChange={() => toggleSearchColumn(column.key)}
+            />
+          </label>
+        ))}
+      </Menu>
+
+      {/* Portal: 永久高亮列表菜单 */}
+      <Menu
+        open={menuState.kind === 'highlights'}
+        anchor={menuState.anchor}
+        onClose={closeMenu}
+        label="高亮规则列表"
+        className="w-80 p-2"
+      >
+        <div className="mb-1.5 flex items-center justify-between px-1">
+          <span className="text-[11px] font-semibold text-ink-2">永久高亮 · {pins.length}</span>
+          {pins.length > 0 ? (
+            <button
+              type="button"
+              className="text-[11px] text-ink-3 hover:text-danger"
+              onClick={() => {
+                onFilterChange({ pinnedHighlights: [] });
+                setColorPinId(null);
+              }}
+            >
+              清除全部
+            </button>
+          ) : null}
+        </div>
+        {pins.length === 0 ? (
+          <p className="px-2 py-4 text-center text-[11px] text-ink-3">
+            尚无高亮规则。在搜索框输入关键词后点击“高亮”固定。
+          </p>
+        ) : (
+          <div className="max-h-64 space-y-1 overflow-auto">
+            {pins.map((pin) => {
+              const preset = HIGHLIGHT_COLOR_PRESETS.find((item) => item.id === pin.color) || HIGHLIGHT_COLOR_PRESETS[0];
+              const isHidden = Boolean(pin.hidden);
+              return (
+                <div key={pin.id} className="rounded px-1.5 py-1 hover:bg-raised">
+                  <div className="flex min-h-7 items-center gap-1.5">
+                    <Tooltip text="更换颜色">
+                      <button
+                        type="button"
+                        className={`h-3.5 w-3.5 shrink-0 rounded-full ${preset.bgDot} ${isHidden ? 'opacity-40' : ''}`}
+                        onClick={() => setColorPinId(colorPinId === pin.id ? null : pin.id)}
+                        aria-label={`调整高亮 ${pin.keyword} 颜色`}
+                      />
+                    </Tooltip>
+                    <Tooltip text="点击回填到搜索框" className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onFilterChange({
+                            searchKeyword: pin.keyword,
+                            isRegex: Boolean(pin.isRegex),
+                            matchCase: Boolean(pin.matchCase),
+                          });
+                          closeMenu();
+                          searchInputRef.current?.focus();
+                        }}
+                        className={`w-full truncate text-left font-mono text-xs ${
+                          isHidden ? 'text-ink-3 line-through' : 'text-ink hover:text-accent-ink'
+                        }`}
+                      >
+                        {pin.keyword}
+                      </button>
+                    </Tooltip>
+                    {pin.isRegex ? (
+                      <span className="rounded bg-sunken px-1 font-mono text-[9px] text-ink-3">.*</span>
+                    ) : null}
+                    {pin.matchCase ? (
+                      <span className="rounded bg-sunken px-1 font-mono text-[9px] text-ink-3">Aa</span>
+                    ) : null}
+                    <Tooltip text={isHidden ? '显示此高亮' : '暂时隐藏'}>
+                      <button
+                        type="button"
+                        aria-label={isHidden ? `显示高亮 ${pin.keyword}` : `隐藏高亮 ${pin.keyword}`}
+                        onClick={() =>
+                          onFilterChange({
+                            pinnedHighlights: pins.map((item) =>
+                              item.id === pin.id ? { ...item, hidden: !item.hidden } : item,
+                            ),
+                          })
+                        }
+                        className="lv-icon-btn h-6 w-6 shrink-0"
+                      >
+                        {isHidden ? <EyeOff className="h-3.5 w-3.5 text-ink-3" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </Tooltip>
+                    <Tooltip text="移除此高亮">
+                      <button
+                        type="button"
+                        className="lv-icon-btn h-6 w-6 shrink-0"
+                        onClick={() =>
+                          onFilterChange({ pinnedHighlights: pins.filter((item) => item.id !== pin.id) })
+                        }
+                        aria-label={`移除高亮 ${pin.keyword}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                  {colorPinId === pin.id ? (
+                    <div className="mt-1.5 flex items-center gap-1.5 pl-5">
+                      {HIGHLIGHT_COLOR_PRESETS.map((color) => (
+                        <React.Fragment key={color.id}>
+                          <Tooltip text={color.name}>
+                            <button
+                              type="button"
+                              aria-label={`使用${color.name}`}
+                              className={`h-4 w-4 rounded-full ${color.bgDot} ${
+                                pin.color === color.id ? 'ring-2 ring-accent ring-offset-1 ring-offset-surface' : ''
+                              }`}
+                              onClick={() => {
+                                onFilterChange({
+                                  pinnedHighlights: pins.map((item) =>
+                                    item.id === pin.id ? { ...item, color: color.id } : item,
+                                  ),
+                                });
+                                setColorPinId(null);
+                              }}
+                            />
+                          </Tooltip>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Menu>
+
+      {/* Portal: 统一复制 / 导出菜单（T14） */}
+      <Menu
+        open={menuState.kind === 'export'}
+        anchor={menuState.anchor}
+        onClose={closeMenu}
+        label="复制与导出"
+        align="right"
+        className="w-64 p-2"
+      >
+        <p className="mb-1.5 px-1 text-[10.5px] font-semibold text-ink-3">作用范围</p>
+        <div className="lv-seg mb-2 w-full">
+          <button
+            type="button"
+            disabled={selectedCount === 0}
+            aria-pressed={copyScope === CopyScope.Selected}
+            onClick={() => setCopyScope(CopyScope.Selected)}
+            className="flex-1 text-[11px] disabled:opacity-40"
+          >
+            选中 ({selectedCount})
+          </button>
+          <button
+            type="button"
+            aria-pressed={copyScope === CopyScope.Filtered}
+            onClick={() => setCopyScope(CopyScope.Filtered)}
+            className="flex-1 text-[11px]"
+          >
+            筛选 ({filteredCount.toLocaleString()})
+          </button>
+          {filteredCount < totalCount ? (
+            <button
+              type="button"
+              aria-pressed={copyScope === CopyScope.All}
+              onClick={() => setCopyScope(CopyScope.All)}
+              className="flex-1 text-[11px]"
+            >
+              全部 ({totalCount.toLocaleString()})
+            </button>
+          ) : null}
+        </div>
+
+        <p className="mb-1.5 px-1 text-[11px] text-ink-3">
+          将操作 <strong className="font-mono text-ink">{activeScopeCount.toLocaleString()}</strong> 条日志
+        </p>
+
+        <Tooltip text={`复制当前范围内的 ${activeScopeCount.toLocaleString()} 条原始日志文本`} className="block w-full">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={activeScopeCount === 0}
+            onClick={() => void handleCopyAction('raw')}
+            className="lv-menu-item w-full disabled:opacity-40"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span className="flex-1">复制原文</span>
+            <span className="font-mono text-[10px] text-ink-3">{activeScopeCount.toLocaleString()} 条</span>
+          </button>
+        </Tooltip>
+
+        <Tooltip text={`将范围内的 ${activeScopeCount.toLocaleString()} 条日志以 JSON 复制到剪贴板`} className="block w-full">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={activeScopeCount === 0}
+            onClick={() => void handleCopyAction('json')}
+            className="lv-menu-item w-full disabled:opacity-40"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span className="flex-1">复制 JSON</span>
+            <span className="font-mono text-[10px] text-ink-3">{activeScopeCount.toLocaleString()} 条</span>
+          </button>
+        </Tooltip>
+
+        <div className="my-1 h-px bg-line" />
+
+        <Tooltip text={`导出当前范围内的 ${activeScopeCount.toLocaleString()} 条日志为 .csv 文件`} className="block w-full">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={activeScopeCount === 0}
+            onClick={() => {
+              onExportScope(copyScope, 'csv');
+              closeMenu();
+            }}
+            className="lv-menu-item w-full disabled:opacity-40"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="flex-1">导出 CSV</span>
+            <span className="font-mono text-[10px] text-ink-3">.csv</span>
+          </button>
+        </Tooltip>
+
+        <Tooltip text={`导出当前范围内的 ${activeScopeCount.toLocaleString()} 条日志为 .json 文件`} className="block w-full">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={activeScopeCount === 0}
+            onClick={() => {
+              onExportScope(copyScope, 'json');
+              closeMenu();
+            }}
+            className="lv-menu-item w-full disabled:opacity-40"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="flex-1">导出 JSON</span>
+            <span className="font-mono text-[10px] text-ink-3">.json</span>
+          </button>
+        </Tooltip>
+      </Menu>
+
+      {editingJump && jumpError && jumpErrorPos && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              role="alert"
+              style={{ left: jumpErrorPos.left, top: jumpErrorPos.top, zIndex: MenuLayerConst.ZIndex }}
+              className="pointer-events-none fixed whitespace-nowrap rounded-md border border-danger/60 bg-surface px-2 py-1 text-[11px] font-medium text-danger shadow-[var(--shadow-pop)]"
+            >
+              {jumpError}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 };

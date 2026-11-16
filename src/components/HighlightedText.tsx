@@ -40,7 +40,7 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
 
   const hQuery = highlight?.trim();
   const sQuery = searchHighlight?.trim();
-  const activePins = pinnedHighlights.filter((p) => p.keyword.trim().length > 0);
+  const activePins = pinnedHighlights.filter((p) => !p.hidden && p.keyword.trim().length > 0);
 
   if (!hQuery && !sQuery && activePins.length === 0) {
     return <span className={className}>{text}</span>;
@@ -82,14 +82,14 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
   };
 
   if (sQuery) collectRanges(sQuery, searchIsRegex, searchMatchCase, 'search');
-  if (hQuery) collectRanges(hQuery, isRegex, matchCase, 'highlight', 'purple');
+  if (hQuery) collectRanges(hQuery, isRegex, matchCase, 'highlight', 'emerald');
   for (const pin of activePins) {
     collectRanges(
       pin.keyword.trim(),
       pin.isRegex ?? false,
       pin.matchCase ?? false,
       'pinned',
-      pin.color || 'purple'
+      pin.color || 'emerald'
     );
   }
 
@@ -115,12 +115,12 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
     if (r.type === 'search') {
       if (legacyHighlightStyle) {
         styleClass = isLight
-          ? 'bg-amber-300 text-amber-950 font-semibold px-0.5 rounded border border-amber-400/80 shadow-2xs'
-          : 'bg-amber-500/50 text-amber-100 font-semibold px-0.5 rounded border border-amber-400/60 shadow-2xs';
+          ? 'bg-[#c8f0d8] text-[#0f6b43] font-semibold px-0.5 rounded border border-[#138a5a]/50 shadow-2xs'
+          : 'bg-emerald-500/45 text-emerald-100 font-semibold px-0.5 rounded border border-emerald-400/60 shadow-2xs';
       } else {
         styleClass = isLight
-          ? 'bg-amber-300/90 text-amber-950 rounded-[2px]'
-          : 'bg-amber-400/45 text-amber-100 rounded-[2px]';
+          ? 'bg-[#c8f0d8] text-[#0f6b43] rounded-[2px]'
+          : 'bg-emerald-500/40 text-emerald-100 rounded-[2px]';
       }
     } else {
       styleClass = getHighlightColorStyle(r.colorId, theme as ThemeMode, legacyHighlightStyle);

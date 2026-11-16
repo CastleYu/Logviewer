@@ -1,57 +1,89 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bot, CheckSquare2, ChevronDown, Copy, Download, ListChecks, X } from 'lucide-react';
-import { LogFormatConfig } from '../config/logFormatTypes';
-import { LogEntry, ThemeMode } from '../types';
-import { copyActions } from '../utils/logCopyUtils';
-import { CopyActionPopover, type CopyFeedback } from './CopyActionPopover';
+import React, { useEffect } from 'react';
+import { CheckSquare } from 'lucide-react';
+import { UiShortcutKey } from '../config/uiConstants';
+import { Tooltip } from './Tooltip';
 
 interface SelectionActionBarProps {
-  selectedLogs: LogEntry[];
-  filteredLogs: LogEntry[];
-  format: LogFormatConfig;
-  theme: ThemeMode;
-  onCopyRaw: () => void;
-  onExportCSV: (logs: LogEntry[]) => void;
-  onExportJSON: (logs: LogEntry[]) => void;
-  onAnalyze: (logs: LogEntry[]) => void;
+  selectedCount: number;
+  filteredCount: number;
+  totalCount: number;
   onSelectAll: () => void;
-  onClear: () => void;
+  onClearSelection: () => void;
 }
 
-export function SelectionActionBar({ selectedLogs, filteredLogs, format, theme, onCopyRaw, onExportCSV, onExportJSON, onAnalyze, onSelectAll, onClear }: SelectionActionBarProps) {
-  const [copyAnchor, setCopyAnchor] = useState<DOMRect | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [feedback, setFeedback] = useState('');
-  const menuRef = useRef<HTMLDivElement>(null);
-  const actions = copyActions(format);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', escape);
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape); };
-  }, [menuOpen]);
-  if (!selectedLogs.length) return null;
-  const button = 'lv-btn h-7 shrink-0 px-2 text-[11px]';
-  const copied = (result: CopyFeedback) => setFeedback(result.message);
-  return (
-    <section aria-label="选中日志操作" className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-t border-line bg-raised px-2 py-1.5 text-xs text-ink-2 sm:px-3">
-      <span className="mr-1 flex items-center gap-1.5 font-semibold text-accent-ink"><ListChecks className="h-4 w-4" />已选 {selectedLogs.length.toLocaleString()} 条</span>
-      <div ref={menuRef} className="relative">
-        <button type="button" className={button} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><Copy className="h-3.5 w-3.5" />复制 / 导出<ChevronDown className="h-3 w-3" /></button>
-        {menuOpen ? <div role="menu" className="lv-menu absolute bottom-full left-0 z-[100] mb-1.5 w-48 p-1.5">
-          <button type="button" role="menuitem" className="lv-menu-item" onClick={() => { onCopyRaw(); setFeedback(`已请求复制 ${selectedLogs.length} 条原文`); setMenuOpen(false); }}><Copy className="h-3.5 w-3.5" />复制原文</button>
-          {actions.length ? <button type="button" role="menuitem" className="lv-menu-item" onClick={(event) => { setCopyAnchor(event.currentTarget.getBoundingClientRect()); setMenuOpen(false); }}><CheckSquare2 className="h-3.5 w-3.5" />复制字段</button> : null}
-          <button type="button" role="menuitem" className="lv-menu-item" title={`导出选中的 ${selectedLogs.length} 条为 CSV`} onClick={() => { onExportCSV(selectedLogs); setMenuOpen(false); }}><Download className="h-3.5 w-3.5" />导出 CSV</button>
-          <button type="button" role="menuitem" className="lv-menu-item" title={`导出选中的 ${selectedLogs.length} 条为 JSON`} onClick={() => { onExportJSON(selectedLogs); setMenuOpen(false); }}><Download className="h-3.5 w-3.5" />导出 JSON</button>
-        </div> : null}
-      </div>
-      <button type="button" className={button} onClick={() => onAnalyze(selectedLogs)}><Bot className="h-3.5 w-3.5" />AI 分析</button>
-      {feedback ? <span role="status" className={`max-w-56 truncate text-[10px] ${feedback.includes('失败') ? 'text-danger' : 'text-ink-3'}`} aria-live="polite" title={feedback}>{feedback}</span> : null}
-      <button type="button" className="ml-auto text-[11px] text-ink-3 hover:text-ink" onClick={onSelectAll}>全选筛选结果 {filteredLogs.length.toLocaleString()} 条</button>
-      <button type="button" className="lv-icon-btn h-7 w-7" onClick={onClear} aria-label="清除日志选择" title="清除选择"><X className="h-4 w-4" /></button>
-      {copyAnchor ? <CopyActionPopover actions={actions} selectedLogs={selectedLogs} filteredLogs={filteredLogs} anchor={copyAnchor} theme={theme} onResult={copied} onClose={() => setCopyAnchor(null)} /> : null}
-    </section>
-  );
+function isEditableElement(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
 }
+
+/**
+ * 底部固定状态与选中栏（M10）：打开日志后常驻 32px 高度，左侧全选筛选结果与已选数，右侧显示 M / K 条。
+ */
+export const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
+  selectedCount,
+  filteredCount,
+  totalCount,
+  onSelectAll,
+  onClearSelection,
+}) => {
+  useEffect(() => {
+    if (selectedCount === 0) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== UiShortcutKey.Escape || event.defaultPrevented) return;
+      if (isEditableElement(event.target)) return;
+      if (document.querySelector('[data-menu], [role="dialog"]')) return;
+      onClearSelection();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedCount, onClearSelection]);
+
+  const allSelected = filteredCount > 0 && selectedCount >= filteredCount;
+
+  return (
+    <div
+      className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-line bg-surface px-3 text-[11px] text-ink-2 select-none"
+      role="status"
+      aria-label="选中与计数状态栏"
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Tooltip text={allSelected ? '已全选当前筛选结果' : `全选当前筛选结果（${filteredCount.toLocaleString()} 条）`}>
+          <button
+            type="button"
+            disabled={filteredCount === 0}
+            onClick={onSelectAll}
+            className={`inline-flex h-5.5 items-center gap-1 rounded border px-2 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+              allSelected
+                ? 'border-accent/40 bg-accent-soft text-accent-ink'
+                : 'border-line bg-raised text-ink-2 hover:border-line-strong hover:text-ink'
+            }`}
+          >
+            <CheckSquare className="h-3 w-3" />
+            <span>全选筛选结果 {filteredCount.toLocaleString()} 条</span>
+          </button>
+        </Tooltip>
+
+        <span className="h-3.5 w-px bg-line" aria-hidden="true" />
+
+        {selectedCount > 0 ? (
+          <span className="flex items-center gap-1.5 font-medium tabular-nums text-accent-ink">
+            <span>已选 {selectedCount.toLocaleString()} 条</span>
+            <Tooltip text="清空当前选中行" kbd="Esc">
+              <kbd className="lv-kbd cursor-pointer" onClick={onClearSelection}>
+                Esc 清空
+              </kbd>
+            </Tooltip>
+          </span>
+        ) : (
+          <span className="text-ink-3">未选择</span>
+        )}
+      </div>
+
+      <div className="shrink-0 font-mono text-[11px] tabular-nums text-ink-3">
+        显示 <strong className="font-semibold text-ink-2">{filteredCount.toLocaleString()}</strong> / {totalCount.toLocaleString()} 条
+      </div>
+    </div>
+  );
+};

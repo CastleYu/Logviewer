@@ -1,7 +1,9 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { LogEntry, DisplayDensity, ColumnVisibility, FilterOptions, ColumnWidths, ThemeMode, BorderIntensity, ColumnFilterKey, FilterValue, LogLevel } from '../types';
-import { StackCell } from './StackCell';
-import { stackSummary, frameCount } from '../utils/stackParser';
+import { InlineStackTrace } from './InlineStackTrace';
+import { LineJumpHeader } from './LineJumpHeader';
+import { LevelPresentation } from '../config/uiConstants';
+import { stripStackFromMessage } from '../utils/stackClassify';
 import { HighlightedText } from './HighlightedText';
 import { SourceMenuItem } from './SourceNavigation';
 import { sourceField } from '../utils/sourceUtils';
@@ -23,9 +25,11 @@ import {
 
 interface VirtualLogTableProps {
   logs: LogEntry[];
-  onOpenStack: (log: LogEntry) => void;
   onAnalyze?: (logs: LogEntry[]) => void;
   format: LogFormatConfig;
+  stackEnabled?: boolean;
+  stackRawMode?: boolean;
+  repository?: string;
   density: DisplayDensity;
   columnVisibility: ColumnVisibility;
   selectedIds: Set<number>;
@@ -64,7 +68,7 @@ interface ContextMenuState {
 }
 
 const defaultWidths: ColumnWidths = {
-  index: 48,
+  index: 64,
   timestamp: 176,
   level: 72,
   requestId: 112,
@@ -90,6 +94,13 @@ const minColumnWidths: Record<keyof ColumnWidths, number> = {
   fileName: 80,
   lineNumber: 48,
 };
+
+const DENSITY_PAD_Y: Record<DisplayDensity, number> = {
+  compact: 4,   // py-0.5
+  normal: 8,    // py-1
+  relaxed: 12,  // py-1.5
+};
+const ROW_LINE_HEIGHT = 16;
 
 interface HeaderFilterButtonProps {
   label: string;
@@ -144,9 +155,11 @@ function isFilterActive(column: ColumnFilterKey, filter: FilterOptions): boolean
 
 export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   logs,
-  onOpenStack,
   onAnalyze,
   format,
+  stackEnabled = true,
+  stackRawMode = false,
+  repository,
   density,
   columnVisibility,
   selectedIds,
@@ -348,43 +361,46 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   // 重置测量缓存 (当影响布局的参数发生改变时，非拖拽中重置)
   useEffect(() => {
     setMeasuredHeights(new Map());
-  }, [logs, density, wordWrap, columnVisibility]);
+  }, [logs, density, wordWrap, columnVisibility, stackEnabled, stackRawMode]);
+
+  const minRowHeight = DENSITY_PAD_Y[density] + ROW_LINE_HEIGHT;
 
   // 动态计算每一行日志的真实高度与全局偏移量
   const itemHeights = React.useMemo(() => {
-    const padYMap: Record<DisplayDensity, number> = {
-      compact: 4,   // py-0.5
-      normal: 8,    // py-1
-      relaxed: 12,  // py-1.5
-    };
-
-    const padY = padYMap[density];
-    const LINE_HEIGHT = 16;
-
-    if (!wordWrap) {
-      return logs.map((entry) => measuredHeights.get(entry.id) ?? (padY + LINE_HEIGHT));
-    }
+    const padY = DENSITY_PAD_Y[density];
 
     return logs.map((entry) => {
       const measured = measuredHeights.get(entry.id);
-      if (measured !== undefined) return measured;
+      if (measured !== undefined) return Math.max(minRowHeight, measured);
 
-      const text = entry.success
-        ? (entry.stack ? stackSummary(entry.stack) : entry.fields?.operationDesc || entry.rawText)
-        : entry.rawText;
-
-      if (!text) return padY + LINE_HEIGHT;
-
-      const lines = text.split('\n');
-      let lineCount = 0;
-
-      for (const l of lines) {
-        lineCount += Math.max(1, Math.ceil(l.length / charsPerLine));
+      const hasInlineStack = Boolean(entry.stack && stackEnabled);
+      if (!wordWrap && !hasInlineStack) {
+        return minRowHeight;
       }
 
-      return padY + Math.max(1, lineCount) * LINE_HEIGHT;
+      const rawDesc = entry.success
+        ? (entry.fields?.operationDesc || entry.rawText)
+        : entry.rawText;
+      const text = hasInlineStack && entry.stack
+        ? stripStackFromMessage(rawDesc, entry.stack.raw)
+        : rawDesc;
+
+      let lineCount = text ? 1 : 0;
+      if (wordWrap && text) {
+        const lines = text.split('\n');
+        lineCount = 0;
+        for (const l of lines) {
+          lineCount += Math.max(1, Math.ceil(l.length / charsPerLine));
+        }
+      }
+
+      const stackEstimate = hasInlineStack && entry.stack
+        ? Math.min(360, (entry.stack.raw.split('\n').length + 3) * 20)
+        : 0;
+
+      return padY + Math.max(1, lineCount) * ROW_LINE_HEIGHT + stackEstimate;
     });
-  }, [logs, density, wordWrap, charsPerLine, measuredHeights]);
+  }, [logs, density, minRowHeight, wordWrap, charsPerLine, measuredHeights, stackEnabled]);
 
   const offsets = React.useMemo(() => {
     const arr = new Float64Array(logs.length + 1);
@@ -395,7 +411,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     return arr;
   }, [logs.length, itemHeights]);
 
-  const totalHeight = HEADER_HEIGHT + (offsets[logs.length] || 0);
+  const totalHeight = HEADER_HEIGHT + (offsets[logs.length] || 0) + 40;
 
   // 视口滚动锚点：在列宽调整或容器尺寸变动时保持当前视口首行精确锁定，避免视图跳跃
   const anchorRef = useRef<{ index: number; offset: number } | null>(null);
@@ -542,7 +558,31 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     }
   }, [targetNavLog, logs, smartScrollToTargetIndex, triggerRowHighlight]);
 
-  // 响应跳转行指令 (仅在 jumpToLine 真实变化时触发)
+  const executeJumpBySourceLine = useCallback((targetVal: number) => {
+    if (!targetVal || logs.length === 0) return;
+    const matchIdx = logs.findIndex(
+      (log) =>
+        log.lineNumber === targetVal ||
+        (log.stack && log.lineNumber <= targetVal && (log.endLineNumber ?? log.lineNumber) >= targetVal),
+    );
+
+    if (matchIdx >= 0 && matchIdx < logs.length) {
+      const targetEntry = logs[matchIdx];
+      onSelectionChange(new Set([targetEntry.id]));
+      setLastSelectedLogId(targetEntry.id);
+      smartScrollToTargetIndex(matchIdx);
+      triggerRowHighlight(targetEntry.id);
+      setToastOk(true);
+      setToastMessage(`已跳转至第 ${targetVal} 行`);
+      window.setTimeout(() => setToastMessage((cur) => (cur === `已跳转至第 ${targetVal} 行` ? null : cur)), 2000);
+    } else {
+      setToastOk(false);
+      setToastMessage(`第 ${targetVal} 行不在当前结果中`);
+      window.setTimeout(() => setToastMessage((cur) => (cur === `第 ${targetVal} 行不在当前结果中` ? null : cur)), 2400);
+    }
+  }, [logs, onSelectionChange, smartScrollToTargetIndex, triggerRowHighlight]);
+
+  // 响应外部跳转行指令 (例如 AI 引用行点击)
   const prevJumpToLineRef = useRef<{ line: number; timestamp: number } | null>(null);
   useEffect(() => {
     if (!jumpToLine) {
@@ -551,33 +591,8 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     }
     if (prevJumpToLineRef.current === jumpToLine) return;
     prevJumpToLineRef.current = jumpToLine;
-
-    const targetVal = jumpToLine.line;
-    if (!targetVal || logs.length === 0) return;
-
-    let matchIdx = logs.findIndex((log) => log.stack && log.lineNumber <= targetVal && (log.endLineNumber ?? log.lineNumber) >= targetVal);
-    // 1. 优先按 1-based 当前视图序号精准定位
-    if (matchIdx >= 0) {
-      onOpenStack(logs[matchIdx]);
-    } else if (targetVal >= 1 && targetVal <= logs.length) {
-      matchIdx = targetVal - 1;
-    } else {
-      // 2. 超出视图序列时按日志原始行号 entry.lineNumber 查找
-      matchIdx = logs.findIndex((l) => l.lineNumber === targetVal);
-    }
-
-    if (matchIdx >= 0 && matchIdx < logs.length) {
-      const targetEntry = logs[matchIdx];
-      onSelectionChange(new Set([targetEntry.id]));
-      setLastSelectedLogId(targetEntry.id);
-
-      smartScrollToTargetIndex(matchIdx);
-      triggerRowHighlight(targetEntry.id);
-      triggerFloatingToast(`已跳转至第 ${targetVal} 行`, null);
-    } else {
-      triggerFloatingToast(`未找到第 ${targetVal} 行`, null);
-    }
-  }, [jumpToLine, logs, onSelectionChange, triggerFloatingToast, triggerRowHighlight, smartScrollToTargetIndex]);
+    executeJumpBySourceLine(jumpToLine.line);
+  }, [jumpToLine, executeJumpBySourceLine]);
 
   // 选定行时，以选定的 strictly filtered logs 改变为基准触发定位
   const prevLogsRef = useRef(logs);
@@ -595,8 +610,12 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
   }, [logs, lastSelectedLogId, selectedIds, smartScrollToTargetIndex]);
 
   // 批量刷新渲染行的真实 DOM 高度 (采用 requestAnimationFrame 批处理，避免单帧多次 setState 造成布局卡顿与抖动)
+  const measuredHeightsRef = useRef(measuredHeights);
+  measuredHeightsRef.current = measuredHeights;
   const pendingMeasuresRef = useRef<Map<number, number>>(new Map());
   const measureRafRef = useRef<number | null>(null);
+  const pendingRemeasuresRef = useRef<Set<number>>(new Set());
+  const remeasureRafRef = useRef<number | null>(null);
 
   const flushMeasures = useCallback(() => {
     if (pendingMeasuresRef.current.size === 0) return;
@@ -607,31 +626,58 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
       const next = new Map(prev);
       for (const [id, h] of updates) {
         if (typeof h !== 'number') continue;
+        const clamped = Math.max(minRowHeight, h);
         const cur = prev.get(id);
-        if (cur !== h && Math.abs((cur ?? 0) - h) > 1) {
-          next.set(id, h);
+        if (cur !== clamped && Math.abs((cur ?? 0) - clamped) > 1) {
+          next.set(id, clamped);
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, []);
+  }, [minRowHeight]);
 
   useEffect(() => {
     return () => {
       if (measureRafRef.current) {
         cancelAnimationFrame(measureRafRef.current);
       }
+      if (remeasureRafRef.current) {
+        cancelAnimationFrame(remeasureRafRef.current);
+      }
     };
   }, []);
+
+  const rowNodesRef = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  const remeasureRow = useCallback((id: number) => {
+    pendingRemeasuresRef.current.add(id);
+    if (!remeasureRafRef.current) {
+      remeasureRafRef.current = window.requestAnimationFrame(() => {
+        remeasureRafRef.current = null;
+        const ids = Array.from(pendingRemeasuresRef.current);
+        pendingRemeasuresRef.current.clear();
+        for (const rowId of ids) {
+          const node = rowNodesRef.current.get(rowId);
+          if (!node) continue;
+          const h = Math.max(minRowHeight, Math.round(node.getBoundingClientRect().height));
+          if (h > 0) {
+            pendingMeasuresRef.current.set(rowId, h);
+          }
+        }
+        flushMeasures();
+      });
+    }
+  }, [flushMeasures, minRowHeight]);
 
   // 测量渲染行的真实 DOM 高度
   const measureRowRef = React.useCallback(
     (id: number) => (node: HTMLDivElement | null) => {
       if (node) {
-        const h = Math.round(node.getBoundingClientRect().height);
+        rowNodesRef.current.set(id, node);
+        const h = Math.max(minRowHeight, Math.round(node.getBoundingClientRect().height));
         if (h > 0) {
-          const current = measuredHeights.get(id);
+          const current = measuredHeightsRef.current.get(id);
           if (current !== h && Math.abs((current || 0) - h) > 1) {
             pendingMeasuresRef.current.set(id, h);
             if (!measureRafRef.current) {
@@ -642,9 +688,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
             }
           }
         }
+      } else {
+        rowNodesRef.current.delete(id);
       }
     },
-    [measuredHeights, flushMeasures]
+    [flushMeasures, minRowHeight]
   );
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -931,113 +979,53 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     }
   }, [isLight, borderIntensity]);
 
-  // 日志级别 Badge 样式
-  const getLevelStyle = (level?: string) => {
-    if (!level) return isLight ? 'text-slate-600 bg-slate-200' : 'text-slate-400 bg-slate-800/40';
-    switch (level.toUpperCase()) {
-      case 'ERROR':
-        return isLight
-          ? 'text-rose-700 bg-rose-50 font-semibold border border-rose-200 shadow-2xs'
-          : 'text-rose-300 bg-rose-950/60 font-semibold border border-rose-800/60';
-      case 'WARN':
-        return isLight
-          ? 'text-amber-800 bg-amber-50 font-semibold border border-amber-200 shadow-2xs'
-          : 'text-amber-300 bg-amber-950/50 font-semibold border border-amber-800/50';
-      case 'INFO':
-        return isLight
-          ? 'text-blue-700 bg-blue-50 font-semibold border border-blue-200 shadow-2xs'
-          : 'text-sky-300 bg-sky-950/50 font-semibold border border-sky-800/50';
-      case 'DEBUG':
-        return isLight
-          ? 'text-slate-700 bg-slate-100 font-medium border border-slate-200'
-          : 'text-slate-300 bg-slate-800/60 font-medium border border-slate-700/60';
-      default:
-        return isLight ? 'text-slate-700 bg-slate-200' : 'text-slate-300 bg-slate-800';
-    }
-  };
+  // H2 统一日志级别 Badge 样式
+  const getLevelStyle = (level?: string) => LevelPresentation.badge(level || '');
 
-  // 行背景与边框样式 (选中时使用 2px 加粗内嵌高亮边框 box-shadow 与统一 4px 左侧强调边，相邻选中行完美重合并不丢失行间分隔线，且完全不改变字符度量或触发额外换行)
+  // H2 行背景与选中态边框样式（浅/深双主题统一语义色；选中行与 WARN 黄色明确区分）
   const getRowSelectionStyle = (
     entry: LogEntry,
     isSelected: boolean,
     prevSelected: boolean,
-    nextSelected: boolean
+    nextSelected: boolean,
+    isSearchActive: boolean,
   ): { bgClass: string; boxShadow?: string } => {
-    const lvl = entry.fields?.level?.toUpperCase();
-    const isErrorLevel = !entry.success || lvl === 'ERROR' || lvl === 'FATAL' || lvl === 'ERR';
-    const isWarnLevel = lvl === 'WARN';
-    const isInfoLevel = lvl === 'INFO';
+    const rawLevel = entry.fields?.level;
+    const token = rawLevel ? LevelPresentation.normalize(rawLevel) : null;
+    const visual = LevelPresentation.resolve(rawLevel, entry.success, true);
 
     if (!isSelected) {
-      if (isErrorLevel) {
-        return {
-          bgClass: isLight
-            ? 'bg-rose-100/60 text-rose-950 hover:bg-rose-100/90 border-l-[4px] border-l-rose-500'
-            : 'bg-rose-950/60 text-rose-200 hover:bg-rose-950/80 border-l-[4px] border-l-rose-500',
-        };
-      }
-      if (isWarnLevel) {
-        return {
-          bgClass: isLight
-            ? 'bg-amber-50/70 text-amber-950 hover:bg-amber-100/80 border-l-[4px] border-l-amber-500/80'
-            : 'bg-amber-950/30 text-amber-200 hover:bg-amber-950/50 border-l-[4px] border-l-amber-500/70',
-        };
-      }
-      if (isInfoLevel) {
-        return {
-          bgClass: isLight
-            ? 'hover:bg-slate-100/80 text-slate-800 border-l-[4px] border-l-transparent'
-            : 'hover:bg-slate-800/50 text-slate-200 border-l-[4px] border-l-transparent',
-        };
-      }
+      const searchEdge = isSearchActive
+        ? 'border-l-[4px] border-l-[#0284c7] dark:border-l-[#38bdf8]'
+        : token === 'ERROR' || token === 'FATAL' || !entry.success
+          ? 'border-l-[4px] border-l-danger'
+          : token === 'WARN'
+            ? 'border-l-[4px] border-l-warn'
+            : 'border-l-[4px] border-l-transparent';
+
+      const rowBg = isSearchActive
+        ? 'bg-[#eef6ff] dark:bg-[#132234]'
+        : visual.rowBgClass;
+      const hoverTint = rowBg ? 'hover:brightness-[0.98] dark:hover:brightness-110' : 'hover:bg-raised/70';
       return {
-        bgClass: isLight
-          ? 'hover:bg-slate-100/80 text-slate-800 border-l-[4px] border-l-transparent'
-          : 'hover:bg-slate-800/50 text-slate-200 border-l-[4px] border-l-transparent',
+        bgClass: `${rowBg} ${hoverTint} text-ink ${searchEdge}`,
       };
     }
 
-    // 选中行高亮样式
-    let baseClass = '';
-    let ringColor = '';
-    let innerDividerColor = '';
-
-    if (isErrorLevel) {
-      baseClass = isLight
-        ? 'bg-rose-200/95 text-rose-950 border-l-[4px] border-l-rose-700 shadow-xs z-10'
-        : 'bg-rose-900/85 text-rose-100 border-l-[4px] border-l-rose-400 shadow-xs z-10';
-      ringColor = isLight ? 'rgba(225, 29, 72, 0.9)' : 'rgba(244, 63, 94, 0.95)';
-      innerDividerColor = isLight ? 'rgba(225, 29, 72, 0.5)' : 'rgba(244, 63, 94, 0.55)';
-    } else if (isWarnLevel) {
-      baseClass = isLight
-        ? 'bg-amber-200/95 text-amber-950 border-l-[4px] border-l-amber-700 shadow-xs z-10'
-        : 'bg-amber-900/80 text-amber-100 border-l-[4px] border-l-amber-400 shadow-xs z-10';
-      ringColor = isLight ? 'rgba(217, 119, 6, 0.9)' : 'rgba(245, 158, 11, 0.95)';
-      innerDividerColor = isLight ? 'rgba(217, 119, 6, 0.5)' : 'rgba(245, 158, 11, 0.55)';
-    } else if (isInfoLevel) {
-      baseClass = isLight
-        ? 'bg-sky-100/95 text-sky-950 border-l-[4px] border-l-sky-600 shadow-xs z-10'
-        : 'bg-sky-900/70 text-sky-100 border-l-[4px] border-l-sky-400 shadow-xs z-10';
-      ringColor = isLight ? 'rgba(2, 132, 199, 0.9)' : 'rgba(14, 165, 233, 0.95)';
-      innerDividerColor = isLight ? 'rgba(2, 132, 199, 0.5)' : 'rgba(14, 165, 233, 0.55)';
-    } else {
-      baseClass = isLight
-        ? 'bg-indigo-100/95 text-indigo-950 border-l-[4px] border-l-indigo-600 shadow-xs z-10'
-        : 'bg-indigo-950/80 text-indigo-100 border-l-[4px] border-l-indigo-400 shadow-xs z-10';
-      ringColor = isLight ? 'rgba(79, 70, 229, 0.9)' : 'rgba(99, 102, 241, 0.95)';
-      innerDividerColor = isLight ? 'rgba(79, 70, 229, 0.5)' : 'rgba(99, 102, 241, 0.55)';
-    }
+    let baseClass = isSearchActive
+      ? 'bg-[#e0efff] text-ink dark:bg-[#172b42] dark:text-slate-100 border-l-[4px] border-l-[#0284c7] dark:border-l-[#38bdf8] shadow-xs z-10'
+      : 'bg-[#e5ecff] text-ink dark:bg-[#1e2c4a] dark:text-slate-100 border-l-[4px] border-l-accent shadow-xs z-10';
+    const ringColor = isSearchActive
+      ? (isLight ? 'rgba(2, 132, 199, 0.85)' : 'rgba(56, 189, 248, 0.85)')
+      : 'rgba(59, 91, 219, 0.85)';
+    const innerDividerColor = isSearchActive
+      ? (isLight ? 'rgba(2, 132, 199, 0.35)' : 'rgba(56, 189, 248, 0.35)')
+      : 'rgba(59, 91, 219, 0.35)';
 
     if (legacyBoldSelection) {
       baseClass += ' font-bold';
     }
 
-    // 解决相邻选中行边框重合与消失问题：
-    // - 外边框顶部 (2px): 仅在非连续上一行时绘制 2px
-    // - 外边框底部 (2px): 仅在非连续下一行时绘制 2px
-    // - 相邻选中行之间 (1px): 当下一行也是选中行时，绘制清晰的 1px 行间分隔线（既不消失，也不重复加粗冲突）
-    // - 外边框右侧 (2px): 始终绘制 2px
-    // - 左侧由 4px 实心 border-l 提供
     const shadows: string[] = [];
     if (!prevSelected) {
       shadows.push(`inset 0 2px 0 0 ${ringColor}`);
@@ -1045,7 +1033,6 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
     if (!nextSelected) {
       shadows.push(`inset 0 -2px 0 0 ${ringColor}`);
     } else {
-      // 保证相邻选中行之间始终具有清晰的行间分隔线，绝不消失
       shadows.push(`inset 0 -1px 0 0 ${innerDividerColor}`);
     }
     shadows.push(`inset -2px 0 0 0 ${ringColor}`);
@@ -1192,14 +1179,24 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
           <div className={`sticky top-0 z-20 h-7.5 shrink-0 backdrop-blur-md font-sans font-semibold text-[11px] flex items-center shadow-2xs select-none border-b border-l-[3px] border-l-transparent ${
             isLight ? 'bg-slate-100/95 text-slate-700 border-slate-300/80' : 'bg-slate-900/95 text-slate-300 border-slate-800'
           }`}>
-              {/* 序号列 header */}
+              {/* 序号列 header（含 T12 源行号跳转） */}
               {columnVisibility.index && (
-                <div 
+                <div
                   data-source-field="index" style={{ width: `${colWidths.index}px` }}
-                  className={`shrink-0 pl-2 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Index, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
+                  className={`shrink-0 px-1.5 py-1 flex items-center justify-between border-r relative group ${isFilterActive(ColumnFilterKey.Index, filter!) ? 'bg-indigo-500/5' : ''} ${borderClass}`}
                 >
-                  <span>#</span>
-                  <HeaderFilterButton label="序号" active={isFilterActive(ColumnFilterKey.Index, filter!)} isLight={isLight} onClick={(event) => toggleColumnFilter(ColumnFilterKey.Index, event)} />
+                  <LineJumpHeader
+                    totalFiltered={logs.length}
+                    onJump={executeJumpBySourceLine}
+                    rightSlot={
+                      <HeaderFilterButton
+                        label="序号"
+                        active={isFilterActive(ColumnFilterKey.Index, filter!)}
+                        isLight={isLight}
+                        onClick={(event) => toggleColumnFilter(ColumnFilterKey.Index, event)}
+                      />
+                    }
+                  />
                   <div
                     onMouseDown={(e) => handleResizeStart('index', e)}
                     onDoubleClick={(e) => handleResizeDoubleClick('index', e)}
@@ -1401,13 +1398,12 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
               visibleLogs.map((entry, sliceIndex) => {
               const actualIndex = startIndex + sliceIndex;
               const topPos = HEADER_HEIGHT + offsets[actualIndex];
-              const curHeight = itemHeights[actualIndex];
               const isSelected = selectedIds.has(entry.id);
               const prevSelected = isSelected && actualIndex > 0 && selectedIds.has(logs[actualIndex - 1].id);
               const nextSelected = isSelected && actualIndex < logs.length - 1 && selectedIds.has(logs[actualIndex + 1].id);
               const isSearchActive = activeSearchLogId === entry.id;
               const isNavHighlighted = highlightedLogId === entry.id;
-              const selStyle = getRowSelectionStyle(entry, isSelected, prevSelected, nextSelected);
+              const selStyle = getRowSelectionStyle(entry, isSelected, prevSelected, nextSelected, isSearchActive);
               const effectiveBorderBottom = isSelected && nextSelected ? 'border-b border-transparent' : borderBottomClass;
 
               return (
@@ -1419,7 +1415,7 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                   style={{
                     position: 'absolute',
                     top: `${topPos}px`,
-                    minHeight: `${curHeight}px`,
+                    minHeight: `${minRowHeight}px`,
                     left: 0,
                     right: 0,
                     boxShadow: selStyle.boxShadow,
@@ -1430,11 +1426,11 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                 >
                   {/* 序号列 */}
                   {columnVisibility.index && (
-                    <div 
+                    <div
                       data-source-field="index" style={{ width: `${colWidths.index}px` }}
-                      className={`shrink-0 px-2 text-center text-slate-400 text-[10px] truncate border-r font-mono flex items-center justify-center ${borderClass}`}
+                      className={`shrink-0 px-2 text-center text-ink-3 text-[10px] truncate border-r font-mono tabular-nums flex items-center justify-center ${borderClass}`}
                     >
-                      <StackCell log={entry} onOpen={onOpenStack} />
+                      {entry.lineNumber}
                     </div>
                   )}
 
@@ -1524,31 +1520,61 @@ export const VirtualLogTable: React.FC<VirtualLogTableProps> = ({
                         </div>
                       )}
 
-                      {/* 4. 操作描述 */}
-                      {columnVisibility.operationDesc && (
-                        <div
-                          data-source-field="operationDesc" style={{ minWidth: `${colWidths.operationDesc}px` }}
-                          className={`flex-1 shrink-0 px-2.5 font-mono border-r select-text flex items-center ${borderClass} ${textDisplayClass}`}
-                          title={entry.fields?.operationDesc}
-                        >
-                          {entry.stack ? <button type="button" onClick={(event) => { event.stopPropagation(); onOpenStack(entry); }} className="min-h-6 min-w-0 text-left underline decoration-dotted underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500" aria-label={`查看堆栈：${stackSummary(entry.stack)}`}>
-                            <HighlightedText text={`${stackSummary(entry.stack)} · ${frameCount(entry.stack)} 帧`} searchHighlight={searchKeyword} searchMatchCase={searchMatchCase} searchIsRegex={searchIsRegex} theme={theme} />
-                          </button> :
-                          <HighlightedText
-                            text={entry.stack ? `${stackSummary(entry.stack)} · ${frameCount(entry.stack)} 帧` : entry.fields?.operationDesc || ''}
-                            highlight={highlightKeyword}
-                            matchCase={highlightMatchCase ?? matchCase}
-                            isRegex={highlightIsRegex}
-                            searchHighlight={searchKeyword}
-                            searchMatchCase={searchMatchCase}
-                            searchIsRegex={searchIsRegex}
-                            pinnedHighlights={filter?.pinnedHighlights}
-                            theme={theme}
-                            legacyHighlightStyle={legacyHighlightStyle}
-                          />
-                          }
-                        </div>
-                      )}
+                      {/* 4. 操作描述（M8/M9 v3 内联堆栈直接渲染在描述文本下方，占满该列宽度；有内联堆栈时剔除重复堆栈正文） */}
+                      {columnVisibility.operationDesc && (() => {
+                        const rawMessage = entry.fields?.operationDesc || entry.rawText.split('\n')[0] || '';
+                        const hasInlineStack = Boolean(entry.stack && stackEnabled);
+                        const messageText = hasInlineStack && entry.stack
+                          ? stripStackFromMessage(rawMessage, entry.stack.raw)
+                          : rawMessage;
+                        return (
+                          <div
+                            data-source-field="operationDesc" style={{ minWidth: `${colWidths.operationDesc}px` }}
+                            className={`flex-1 min-w-0 shrink-0 px-2.5 font-mono border-r select-text flex flex-col overflow-hidden ${
+                              hasInlineStack ? 'justify-start' : 'justify-center'
+                            } ${borderClass}`}
+                          >
+                            {messageText ? (
+                              <div className={`min-w-0 ${textDisplayClass}`}>
+                                <HighlightedText
+                                  text={messageText}
+                                  highlight={highlightKeyword}
+                                  matchCase={highlightMatchCase ?? matchCase}
+                                  isRegex={highlightIsRegex}
+                                  searchHighlight={searchKeyword}
+                                  searchMatchCase={searchMatchCase}
+                                  searchIsRegex={searchIsRegex}
+                                  pinnedHighlights={filter?.pinnedHighlights}
+                                  theme={theme}
+                                  legacyHighlightStyle={legacyHighlightStyle}
+                                />
+                              </div>
+                            ) : null}
+                            {hasInlineStack && entry.stack ? (
+                              <div className="w-full min-w-0" onMouseDown={(event) => event.stopPropagation()}>
+                                <InlineStackTrace
+                                  logKey={String(entry.id)}
+                                  stack={entry.stack}
+                                  formatId={format.id}
+                                  repository={repository}
+                                  rawMode={stackRawMode}
+                                  wordWrap={wordWrap}
+                                  theme={theme}
+                                  highlight={highlightKeyword}
+                                  matchCase={highlightMatchCase ?? matchCase}
+                                  isRegex={highlightIsRegex}
+                                  searchHighlight={searchKeyword}
+                                  searchMatchCase={searchMatchCase}
+                                  searchIsRegex={searchIsRegex}
+                                  pinnedHighlights={filter?.pinnedHighlights}
+                                  legacyHighlightStyle={legacyHighlightStyle}
+                                  onToggleLayout={() => remeasureRow(entry.id)}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
 
                       {/* 5. 函数名 */}
                       {columnVisibility.functionName && (

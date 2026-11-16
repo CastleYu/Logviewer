@@ -36,6 +36,8 @@ interface PanelProps {
   error?: string;
   canClear: boolean;
   canApply?: boolean;
+  rangeKeyword?: string;
+  onRangeKeywordChange?: (value: string) => void;
   onClear: () => void;
   onApply: () => void;
   onClose: () => void;
@@ -109,11 +111,14 @@ function Panel({
   error = '',
   canClear,
   canApply = true,
+  rangeKeyword,
+  onRangeKeywordChange,
   onClear,
   onApply,
   onClose,
 }: PanelProps) {
   const isLight = theme === 'light';
+  const [rangeOpen, setRangeOpen] = useState(Boolean(rangeKeyword));
   return (
     <section
       role="dialog"
@@ -135,6 +140,39 @@ function Panel({
         </button>
       </header>
       <div className="p-3.5">{children}</div>
+      {onRangeKeywordChange ? (
+        <div className={`border-t px-3.5 py-2 ${isLight ? 'border-slate-200 bg-slate-50/70' : 'border-slate-800 bg-slate-950/50'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setRangeOpen((v) => !v)}
+              className="text-[11px] font-medium text-indigo-600 dark:text-indigo-300 hover:underline cursor-pointer"
+            >
+              {rangeOpen ? '收起首末匹配区间' : '首个至末个匹配区间…'}
+            </button>
+            {rangeKeyword ? (
+              <button
+                type="button"
+                onClick={() => onRangeKeywordChange('')}
+                className="text-[10px] text-rose-500 hover:underline cursor-pointer"
+              >
+                清空区间
+              </button>
+            ) : null}
+          </div>
+          {rangeOpen ? (
+            <input
+              type="text"
+              value={rangeKeyword || ''}
+              onChange={(event) => onRangeKeywordChange(event.target.value)}
+              placeholder="保留关键词首次到末次出现之间的记录"
+              className={`mt-1.5 h-7 w-full rounded-md border px-2 font-mono text-[11px] outline-none focus:border-indigo-500 ${
+                isLight ? 'border-slate-300 bg-white' : 'border-slate-700 bg-slate-900'
+              }`}
+            />
+          ) : null}
+        </div>
+      ) : null}
       <div aria-live="polite" className="min-h-6 px-3.5">
         {error ? <p className="text-[11px] text-rose-600 dark:text-rose-400">{error}</p> : null}
       </div>
@@ -169,7 +207,7 @@ function TextPanel({ column, filter, theme, onFilterChange, onClose }: Omit<Colu
     onClose();
   };
   return (
-    <Panel title={columnLabel(column)} description="默认包含匹配，可切换正则和大小写" theme={theme} error={valid ? '' : '正则表达式无效，请检查后重试'} canClear={Boolean(current.value)} canApply={valid} onClear={clear} onApply={apply} onClose={onClose}>
+    <Panel title={columnLabel(column)} description="默认包含匹配，可切换正则和大小写" theme={theme} error={valid ? '' : '正则表达式无效，请检查后重试'} canClear={Boolean(current.value)} canApply={valid} rangeKeyword={filter.rangeKeyword} onRangeKeywordChange={(rangeKeyword) => onFilterChange({ rangeKeyword })} onClear={clear} onApply={apply} onClose={onClose}>
       <div className={`h-9 flex items-center rounded-md border px-2 ${theme === 'light' ? 'bg-slate-50 border-slate-300 focus-within:border-indigo-500' : 'bg-slate-950 border-slate-700 focus-within:border-indigo-500'}`}>
         <Search className="w-3.5 h-3.5 text-indigo-500 shrink-0 mr-1.5" />
         <input autoFocus value={draft.value} onChange={(event) => setDraft({ ...draft, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') apply(); }} placeholder={`搜索${columnLabel(column)}…`} className="min-w-0 flex-1 bg-transparent outline-none text-xs font-mono" />
@@ -195,7 +233,7 @@ function NumericPanel({ filter, theme, onFilterChange, onClose }: Omit<ColumnFil
     onClose();
   };
   return (
-    <Panel title="序号" description="筛选源日志中的连续序号范围" theme={theme} error={error} canClear={Boolean(current.min || current.max)} canApply={valid} onClear={clear} onApply={apply} onClose={onClose}>
+    <Panel title="序号" description="筛选源日志中的连续序号范围" theme={theme} error={error} canClear={Boolean(current.min || current.max)} canApply={valid} rangeKeyword={filter.rangeKeyword} onRangeKeywordChange={(rangeKeyword) => onFilterChange({ rangeKeyword })} onClear={clear} onApply={apply} onClose={onClose}>
       <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
         <label><span className="block mb-1 text-[11px] font-semibold">最小值</span><input autoFocus type="number" min="1" value={draft.min} onChange={(event) => setDraft({ ...draft, min: event.target.value })} className={`h-9 w-full rounded-md border px-2 text-xs font-mono outline-none focus:border-indigo-500 ${theme === 'light' ? 'bg-slate-50 border-slate-300' : 'bg-slate-950 border-slate-700'}`} /></label>
         <span className="pb-2 text-slate-400">—</span>
@@ -236,7 +274,7 @@ function EnumPanel({ column, filter, options, theme, onFilterChange, onClose }: 
     onClose();
   };
   return (
-    <Panel title={columnLabel(column)} description={isLevel ? '同列多选为 OR，不同列之间为 AND' : '输入关键字定位并选择一个值'} theme={theme} canClear={isLevel ? currentLevels.length > 0 : currentValue !== FilterValue.All} onClear={clear} onApply={apply} onClose={onClose}>
+    <Panel title={columnLabel(column)} description={isLevel ? '同列多选为 OR，不同列之间为 AND' : '输入关键字定位并选择一个值'} theme={theme} canClear={isLevel ? currentLevels.length > 0 : currentValue !== FilterValue.All} rangeKeyword={filter.rangeKeyword} onRangeKeywordChange={(rangeKeyword) => onFilterChange({ rangeKeyword })} onClear={clear} onApply={apply} onClose={onClose}>
       {!isLevel ? <div className={`h-8 mb-2 flex items-center rounded-md border px-2 ${theme === 'light' ? 'bg-slate-50 border-slate-300' : 'bg-slate-950 border-slate-700'}`}><Search className="w-3.5 h-3.5 text-indigo-500 mr-1.5" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索可选值…" className="min-w-0 flex-1 bg-transparent outline-none text-xs font-mono" /></div> : null}
       <div className="max-h-52 overflow-y-auto space-y-0.5 pr-1">
         {visible.map((option) => {
@@ -271,7 +309,7 @@ function DatePanel({ filter, timeRange, theme, onFilterChange, onClose }: Omit<C
     setEnd(formatMsForInput(timeRange[1], offset));
   };
   return (
-    <Panel title="时间戳" description="开始和结束时刻均包含在筛选结果中" theme={theme} error={error} canClear={Boolean(filter.startTime || filter.endTime)} canApply={!error} onClear={clear} onApply={apply} onClose={onClose}>
+    <Panel title="时间戳" description="开始和结束时刻均包含在筛选结果中" theme={theme} error={error} canClear={Boolean(filter.startTime || filter.endTime)} canApply={!error} rangeKeyword={filter.rangeKeyword} onRangeKeywordChange={(rangeKeyword) => onFilterChange({ rangeKeyword })} onClear={clear} onApply={apply} onClose={onClose}>
       <div className={`flex items-center justify-between gap-3 rounded-lg px-2.5 py-2 mb-3 ${theme === 'light' ? 'bg-slate-100/80' : 'bg-slate-950'}`}><span className="flex items-center gap-1.5 text-[11px] font-medium"><Clock3 className="w-3.5 h-3.5 text-indigo-500" />输入时区</span><select value={offset} onChange={(event) => setOffset(Number(event.target.value))} className={`h-7 rounded-md border px-2 text-xs font-mono outline-none cursor-pointer ${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-900 border-slate-700'}`}>{Array.from({ length: 27 }, (_, index) => index - 12).map((value) => <option key={value} value={value}>{value === 0 ? 'UTC' : `UTC${value > 0 ? '+' : ''}${value}`}</option>)}</select></div>
       <div className="grid grid-cols-1 gap-2.5"><label><span className="block mb-1 text-[11px] font-semibold">开始（含）</span><input autoFocus type="datetime-local" step="0.001" value={start} onChange={(event) => setStart(event.target.value)} className={`date-time-input h-9 w-full rounded-md border px-2 text-[11px] font-mono outline-none focus:border-indigo-500 ${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-950 border-slate-700'}`} /></label><label><span className="block mb-1 text-[11px] font-semibold">结束（含）</span><input type="datetime-local" step="0.001" value={end} onChange={(event) => setEnd(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') apply(); }} className={`date-time-input h-9 w-full rounded-md border px-2 text-[11px] font-mono outline-none focus:border-indigo-500 ${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-950 border-slate-700'}`} /></label></div>
       <button type="button" disabled={!timeRange} onClick={useFullRange} className="mt-2 text-[10px] text-indigo-600 dark:text-indigo-300 hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline cursor-pointer disabled:cursor-not-allowed">使用完整日志范围</button>
@@ -298,8 +336,10 @@ export function ColumnFilterPopover(props: ColumnFilterPopoverProps) {
 
   return createPortal(
     <>
-      <button type="button" aria-label="关闭列筛选" className="fixed inset-0 z-[110] cursor-default" onClick={onClose} />
-      <div className="fixed z-[120]" style={panelPosition(anchor)}>{content}</div>
+      <button type="button" aria-label="关闭列筛选" className="fixed inset-0 z-[310] cursor-default" onClick={onClose} />
+      <div className="fixed z-[320]" style={panelPosition(anchor)}>
+        {content}
+      </div>
     </>,
     document.body,
   );

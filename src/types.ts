@@ -45,9 +45,10 @@ export interface LogStats {
 export interface PinnedHighlight {
   id: string;
   keyword: string;
-  color: string;                  // 'purple' | 'amber' | 'emerald' | 'cyan' | 'rose' | 'indigo'
+  color: string;                  // 'emerald' | 'amber' | 'purple' | 'cyan' | 'rose' | 'indigo'
   matchCase?: boolean;
   isRegex?: boolean;
+  hidden?: boolean;
 }
 
 export enum ColumnFilterKey {

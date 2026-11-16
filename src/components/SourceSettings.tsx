@@ -265,7 +265,29 @@ export function SourceSettingsPanel({ format, light, onClose }: { format: LogFor
                 </label>
               ))}
             </div>
-            <p className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>当前格式：{format.name}。列选择立即生效，仅在这两列的单元格右键菜单显示“打开源码”。</p>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              {([['app', '业务包 / 路径前缀'], ['lib', '依赖包 / 路径前缀']] as const).map(([key, label]) => {
+                const rule = source.prefixes[format.id] || { app: [], lib: [] };
+                return (
+                  <label key={key} className="text-sm">
+                    {label}
+                    <input
+                      type="text"
+                      aria-label={label}
+                      defaultValue={rule[key].join(', ')}
+                      key={`${format.id}:${key}`}
+                      placeholder={key === 'app' ? '如 com.example., app/, services/' : '如 org.custom., vendor/'}
+                      onBlur={(event) => {
+                        const list = event.target.value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+                        source.setPrefixes(format.id, { ...rule, [key]: list });
+                      }}
+                      className={inputClass}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+            <p className={`text-xs ${light ? 'text-slate-500' : 'text-slate-400'}`}>当前格式：{format.name}。源码列与前缀立即生效（右键“打开源码”及内联堆栈依赖判定）。</p>
             </section>}
             <p role="status" className="text-xs">{state.count} 个文件 · {state.updated ? new Date(state.updated).toLocaleString() : '尚未构建'}{busy ? ' · 正在构建索引…' : ''}</p>
           </div>

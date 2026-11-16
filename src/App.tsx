@@ -5,10 +5,10 @@ import { generateSampleLogsText } from './utils/sampleData';
 import { parseLogTimestampToMs, parseInputTimeToMs } from './utils/dateUtils';
 import { createColumnFilters, matchColumnFilters } from './utils/columnFilterUtils';
 import { createBuiltinLogFormat } from './config/defaultLogFormat';
-import { BuiltinFormatId, ConfigError, LogFormatConfig } from './config/logFormatTypes';
+import { BuiltinFormatId, ConfigError, FieldRole, LogFormatConfig } from './config/logFormatTypes';
 import { loadLogViewerConfig } from './utils/logConfigLoader';
 import { parseConfiguredLogContent } from './utils/configurableLogParser';
-import { configuredFilterSummaries, createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
+import { createConfiguredFilters, matchConfiguredFilters } from './utils/configuredFilterUtils';
 import { AppHeader } from './components/AppHeader';
 import { Toolbar } from './components/Toolbar';
 import { VirtualLogTable } from './components/VirtualLogTable';
@@ -22,9 +22,12 @@ import { DownloadStatus, FileLoadState, LoadPhase, LoadSourceKind, LoadState, Re
 import { TextCodec } from './utils/textCodec';
 import { formatFileSize } from './utils/logParser';
 import { RemoteFileApi } from './services/remoteFileApi';
+import { createPortal } from 'react-dom';
 import { Upload } from 'lucide-react';
 import { RecordMode } from './config/stackTypes';
-import { LogInspector } from './components/LogInspector';
+import {
+  CopyScope, HomeConst, LevelPresentation, LevelToken, UiShortcutKey, UiStorageKey,
+} from './config/uiConstants';
 import { SelectionActionBar } from './components/SelectionActionBar';
 import { useSource } from './components/SourceNavigation';
 import { sourceColumns, sourceTarget } from './utils/sourceUtils';
@@ -41,7 +44,7 @@ import {
 } from './utils/investigationViews';
 
 const defaultColumnWidths: ColumnWidths = {
-  index: 48,
+  index: 64,
   timestamp: 176,
   level: 72,
   requestId: 112,
@@ -93,12 +96,18 @@ function fieldText(value: unknown): string {
 
 export default function App() {
   const [formats, setFormats] = useState<LogFormatConfig[]>(() => [createBuiltinLogFormat()]);
-  const [stackMode, setStackMode] = useState<boolean | undefined>(undefined);
-  const stackModeRef = useRef<boolean | undefined>(undefined);
-  const [stackId, setStackId] = useState<number | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const openStack = useCallback((log: LogEntry) => { setStackId(log.id); setInspectorOpen(true); }, []);
-  const closeInspector = useCallback(() => { setStackId(null); setInspectorOpen(false); }, []);
+  const [stackEnabled, setStackEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(UiStorageKey.StackParseEnabled);
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const stackEnabledRef = useRef<boolean>(stackEnabled);
+  stackEnabledRef.current = stackEnabled;
+  const [stackRawMode, setStackRawMode] = useState(false);
+  const [remoteRevision, setRemoteRevision] = useState(0);
   const [selectedFormatId, setSelectedFormatId] = useState<string>(BuiltinFormatId.LegacyStandard);
   const [configErrors, setConfigErrors] = useState<ConfigError[]>([]);
   const [source, setSource] = useState<LoadedSource | null>(null);
@@ -183,6 +192,7 @@ export default function App() {
   }, [publishLoad]);
 
   const refreshRemoteProfiles = useCallback(() => {
+    setRemoteRevision((n) => n + 1);
     RemoteFileApi.profiles()
       .then(setSftpProfiles)
       .catch(() => setSftpProfiles([{ id: 'default', name: '默认 SFTP 服务器', root: '/', ready: false }]));
@@ -280,11 +290,13 @@ export default function App() {
 
   // 1. 过滤条件状态
   const [filter, setFilter] = useState<FilterOptions>(() => createFilterOptions(createBuiltinLogFormat()));
-  const [investigationMode, setInvestigationMode] = useState<'navigate' | 'highlight'>('navigate');
-  const displayFilter = useMemo(
-    () => investigationMode === 'highlight' ? { ...filter, searchKeyword: '' } : filter,
-    [filter, investigationMode],
-  );
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  const searchNoticeTimerRef = useRef<number | null>(null);
+  const notifySearch = useCallback((text: string) => {
+    setSearchNotice(text);
+    if (searchNoticeTimerRef.current !== null) window.clearTimeout(searchNoticeTimerRef.current);
+    searchNoticeTimerRef.current = window.setTimeout(() => setSearchNotice(null), 1800);
+  }, []);
 
   const selectedFormat = useMemo(
     () => formats.find((format) => format.id === selectedFormatId) || formats[0],
@@ -412,7 +424,6 @@ export default function App() {
     setLegacyBoldSelection(view.display.legacyBoldSelection);
     setLegacyHighlightStyle(view.display.legacyHighlightStyle);
     setSelectedIds(new Set());
-    setStackId(null);
     setJumpToLine(null);
     setTargetNavLog(null);
     if (format.id !== selectedFormatId) {
@@ -429,9 +440,8 @@ export default function App() {
     if (loadId !== undefined) updateLoad(loadId, { phase: LoadPhase.Parsing, loadedBytes: loaded.fileSize, totalBytes: loaded.fileSize });
     setTimeout(() => {
       if (parseSequenceRef.current !== parseId) return;
-      const mode = stackModeRef.current === undefined ? format.record.mode : stackModeRef.current ? RecordMode.Stack : RecordMode.Line;
+      const mode = stackEnabledRef.current ? RecordMode.Stack : RecordMode.Line;
       const activeFormat = { ...format, record: { ...format.record, mode } };
-      setStackId(null);
       const result = format.builtin
         ? parseLogContent(loaded.content, loaded.fileName, loaded.fileSize, activeFormat.record)
         : parseConfiguredLogContent(loaded.content, loaded.fileName, loaded.fileSize, activeFormat);
@@ -498,10 +508,14 @@ export default function App() {
 
   const handleStackMode = (enabled: boolean) => {
     if (isBusy) return;
-    stackModeRef.current = enabled;
-    setStackMode(enabled);
+    stackEnabledRef.current = enabled;
+    setStackEnabled(enabled);
+    try {
+      localStorage.setItem(UiStorageKey.StackParseEnabled, String(enabled));
+    } catch {
+      /* ignore */
+    }
     setSelectedIds(new Set());
-    setStackId(null);
     if (source) {
       const loadId = beginLoad(LoadPhase.Parsing, LoadSourceKind.Reparse, source.fileName, source.fileSize);
       if (loadId !== null) parseSource(source, selectedFormat, 10, loadId);
@@ -590,14 +604,16 @@ export default function App() {
     setHistoryLog(null);
   };
 
-  // 全局拖拽支持
+  // 全局拖拽支持（M3：仅在拖入真实文件时响应）
   const handleGlobalDragOver = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes(HomeConst.DragFilesType)) return;
     e.preventDefault();
     if (isBusy) return;
     setIsDragOver(true);
   };
 
   const handleGlobalDragLeave = (e: React.DragEvent) => {
+    if (!isDragOver) return;
     e.preventDefault();
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setIsDragOver(false);
@@ -605,12 +621,15 @@ export default function App() {
   };
 
   const handleGlobalDrop = (e: React.DragEvent) => {
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) {
+      setIsDragOver(false);
+      return;
+    }
     e.preventDefault();
     setIsDragOver(false);
     if (isBusy) return;
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFile(e.dataTransfer.files[0]);
-    }
+    handleFile(files[0]);
   };
 
   // 提取日志中所有唯一的 Module 模块列表
@@ -779,9 +798,9 @@ export default function App() {
     setHistoryLog((old) => old?.id === id ? { ...old, repository } : old);
   }, [historyLog?.id]);
 
-  // 计算全文搜索匹配的日志 ID 列表；高亮模式不执行定位搜索。
+  // 计算全文搜索匹配的日志 ID 列表（T1–T9）
   const searchMatchLogIds = useMemo(() => {
-    if (investigationMode === 'highlight' || !filter.searchKeyword || !filter.searchKeyword.trim()) return [];
+    if (!filter.searchKeyword || !filter.searchKeyword.trim()) return [];
     let regex: RegExp | null = null;
     try {
       const pattern = filter.isRegex ? filter.searchKeyword : filter.searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -820,20 +839,28 @@ export default function App() {
       }
     }
     return ids;
-  }, [filteredLogs, filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns, investigationMode]);
+  }, [filteredLogs, filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns]);
 
   const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
+  const [searchActive, setSearchActive] = useState<boolean>(false);
   const firstVisibleIndexRef = useRef<number>(0);
+  const tableAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSearchActive(false);
+    setCurrentMatchIndex(0);
+  }, [filter.searchKeyword, filter.isRegex, filter.matchCase, filter.searchColumn, filter.searchColumns, filteredLogs]);
 
   const handleFirstVisibleIndexChange = useCallback((index: number) => {
     firstVisibleIndexRef.current = index;
   }, []);
 
   const activeSearchLogId = useMemo(() => {
-    if (searchMatchLogIds.length === 0) return null;
+    if (!searchActive || searchMatchLogIds.length === 0) return null;
     const idx = Math.min(Math.max(0, currentMatchIndex), searchMatchLogIds.length - 1);
     return searchMatchLogIds[idx];
-  }, [searchMatchLogIds, currentMatchIndex]);
+  }, [searchActive, searchMatchLogIds, currentMatchIndex]);
+
   const selectedLogs = useMemo(() => filteredLogs.filter((log) => selectedIds.has(log.id)), [filteredLogs, selectedIds]);
   const aiView = useCallback((): AiView => {
     const picked = filteredLogs.filter((item) => selectedIds.has(item.id)).map((item) => item.lineNumber);
@@ -841,106 +868,198 @@ export default function App() {
     const end = filteredLogs[Math.min(filteredLogs.length - 1, firstVisibleIndexRef.current + 40)];
     return { selected: picked, search: filter.searchKeyword || '', filter: filteredLogs.length === logs.length ? '' : `${filteredLogs.length} 条`, from: start?.lineNumber || 0, to: end?.lineNumber || 0, use: picked.length > 0 };
   }, [filteredLogs, selectedIds, filter.searchKeyword, logs.length]);
-  const stackLog = useMemo(() => stackId === null ? undefined : logs.find((log) => log.id === stackId), [logs, stackId]);
-  const inspectedLog = stackLog || (inspectorOpen && selectedLogs.length === 1 ? selectedLogs[0] : undefined);
 
-  // 点击下一条匹配项：导航并选中
-  const handleNextMatch = useCallback(() => {
-    if (searchMatchLogIds.length === 0) return;
-    const nextIdx = (currentMatchIndex + 1) % searchMatchLogIds.length;
-    setCurrentMatchIndex(nextIdx);
-    const targetLogId = searchMatchLogIds[nextIdx];
+  const jumpToMatch = useCallback((matchIdx: number, wrappedHint?: string) => {
+    setSearchActive(true);
+    setCurrentMatchIndex(matchIdx);
+    const targetLogId = searchMatchLogIds[matchIdx];
     setSelectedIds(new Set([targetLogId]));
     setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
-  }, [searchMatchLogIds, currentMatchIndex]);
+    if (wrappedHint) notifySearch(wrappedHint);
+  }, [searchMatchLogIds, notifySearch]);
 
-  // 点击上一条匹配项：导航并选中
-  const handlePrevMatch = useCallback(() => {
-    if (searchMatchLogIds.length === 0) return;
-    const prevIdx = (currentMatchIndex - 1 + searchMatchLogIds.length) % searchMatchLogIds.length;
-    setCurrentMatchIndex(prevIdx);
-    const targetLogId = searchMatchLogIds[prevIdx];
-    setSelectedIds(new Set([targetLogId]));
-    setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
-  }, [searchMatchLogIds, currentMatchIndex]);
-
-  // 点击搜索按钮或按 Enter：以当前屏幕可视区域首行为基准，搜索后一个匹配目标并导航并选中
+  // 搜索 / 向下定位（从当前可视区首行开始，到底回绕提示）
   const handleTriggerSearch = useCallback(() => {
-    if (searchMatchLogIds.length === 0 || filteredLogs.length === 0) return;
-
+    setSearchActive(true);
+    if (searchMatchLogIds.length === 0 || filteredLogs.length === 0) {
+      setCurrentMatchIndex(0);
+      return;
+    }
     const logIndexMap = new Map<number, number>();
-    filteredLogs.forEach((l, idx) => {
-      logIndexMap.set(l.id, idx);
-    });
-
+    filteredLogs.forEach((l, idx) => logIndexMap.set(l.id, idx));
     const v = firstVisibleIndexRef.current;
 
-    // 寻找在当前屏幕可视区域首行之后（或所在行）的第一个匹配项
     let targetMatchIdx = -1;
-
+    let wrapped = false;
     for (let i = 0; i < searchMatchLogIds.length; i++) {
-      const matchLogId = searchMatchLogIds[i];
-      const rowIdx = logIndexMap.get(matchLogId) ?? -1;
+      const rowIdx = logIndexMap.get(searchMatchLogIds[i]) ?? -1;
+      if (rowIdx >= v) {
+        targetMatchIdx = i;
+        break;
+      }
+    }
+    if (targetMatchIdx === -1) {
+      targetMatchIdx = 0;
+      wrapped = true;
+    }
+    jumpToMatch(targetMatchIdx, wrapped ? '已从头开始' : undefined);
+  }, [searchMatchLogIds, filteredLogs, jumpToMatch]);
 
-      // 如果当前已经选中了该项并且就在当前视口位置，则寻找下一个严格大于当前位置的
-      const isAlreadySelected = selectedIds.has(matchLogId);
-      if (isAlreadySelected) {
-        if (rowIdx > v) {
-          targetMatchIdx = i;
-          break;
-        }
-      } else {
-        if (rowIdx >= v) {
+  const handleNextMatch = useCallback(() => {
+    if (!searchActive) {
+      handleTriggerSearch();
+      return;
+    }
+    if (searchMatchLogIds.length === 0) return;
+    const atEnd = currentMatchIndex + 1 >= searchMatchLogIds.length;
+    const nextIdx = atEnd ? 0 : currentMatchIndex + 1;
+    jumpToMatch(nextIdx, atEnd && searchMatchLogIds.length > 1 ? '已从头开始' : undefined);
+  }, [searchActive, handleTriggerSearch, searchMatchLogIds, currentMatchIndex, jumpToMatch]);
+
+  const handlePrevMatch = useCallback(() => {
+    if (searchMatchLogIds.length === 0 || filteredLogs.length === 0) {
+      setSearchActive(true);
+      setCurrentMatchIndex(0);
+      return;
+    }
+    if (!searchActive) {
+      const logIndexMap = new Map<number, number>();
+      filteredLogs.forEach((l, idx) => logIndexMap.set(l.id, idx));
+      const v = firstVisibleIndexRef.current;
+      let targetMatchIdx = -1;
+      for (let i = searchMatchLogIds.length - 1; i >= 0; i--) {
+        const rowIdx = logIndexMap.get(searchMatchLogIds[i]) ?? -1;
+        if (rowIdx <= v) {
           targetMatchIdx = i;
           break;
         }
       }
+      const wrapped = targetMatchIdx === -1;
+      if (wrapped) targetMatchIdx = searchMatchLogIds.length - 1;
+      jumpToMatch(targetMatchIdx, wrapped ? '已跳至末尾' : undefined);
+      return;
     }
+    const atStart = currentMatchIndex <= 0;
+    const prevIdx = atStart ? searchMatchLogIds.length - 1 : currentMatchIndex - 1;
+    jumpToMatch(prevIdx, atStart && searchMatchLogIds.length > 1 ? '已跳至末尾' : undefined);
+  }, [searchActive, searchMatchLogIds, filteredLogs, currentMatchIndex, jumpToMatch]);
 
-    // 如果在当前屏幕可视区域之后没有更多匹配项，则循环回到首个匹配项 (0)
-    if (targetMatchIdx === -1) {
-      targetMatchIdx = 0;
+  const handleJumpToMatchOrdinal = useCallback((ordinal: number) => {
+    if (!Number.isInteger(ordinal)) return;
+    const index = ordinal - 1;
+    if (index < 0 || index >= searchMatchLogIds.length) return;
+    jumpToMatch(index);
+  }, [searchMatchLogIds.length, jumpToMatch]);
+
+  // T15/T16 错误导航列表与快捷键
+  const errorLogIds = useMemo(() => {
+    const levelField = selectedFormat.builtin
+      ? null
+      : selectedFormat.fields.find((f) => f.role === FieldRole.Level || f.id === 'level') || null;
+    const ids: number[] = [];
+    for (const log of filteredLogs) {
+      if (!log.success) {
+        ids.push(log.id);
+        continue;
+      }
+      const rawLevel = selectedFormat.builtin
+        ? log.fields?.level
+        : levelField
+          ? fieldText(log.fields?.[levelField.id])
+          : '';
+      const token = rawLevel ? LevelPresentation.normalize(rawLevel) : null;
+      if (token === LevelToken.Error || token === LevelToken.Fatal) {
+        ids.push(log.id);
+      }
     }
+    return ids;
+  }, [filteredLogs, selectedFormat]);
 
-    setCurrentMatchIndex(targetMatchIdx);
-    const targetLogId = searchMatchLogIds[targetMatchIdx];
-    setSelectedIds(new Set([targetLogId]));
-    setTargetNavLog({ id: targetLogId, timestamp: Date.now() });
-  }, [searchMatchLogIds, filteredLogs, selectedIds]);
+  const [errorNavIndex, setErrorNavIndex] = useState<number>(-1);
+  useEffect(() => {
+    setErrorNavIndex(-1);
+  }, [errorLogIds]);
+
+  const handleNextError = useCallback(() => {
+    if (errorLogIds.length === 0) return;
+    const nextIdx = (errorNavIndex + 1) % errorLogIds.length;
+    setErrorNavIndex(nextIdx);
+    handleNavigateToLog(errorLogIds[nextIdx]);
+  }, [errorLogIds, errorNavIndex, handleNavigateToLog]);
+
+  const handlePrevError = useCallback(() => {
+    if (errorLogIds.length === 0) return;
+    const prevIdx = errorNavIndex <= 0 ? errorLogIds.length - 1 : errorNavIndex - 1;
+    setErrorNavIndex(prevIdx);
+    handleNavigateToLog(errorLogIds[prevIdx]);
+  }, [errorLogIds, errorNavIndex, handleNavigateToLog]);
+
+  const handleJumpToErrorOrdinal = useCallback((ordinal: number) => {
+    const index = ordinal - 1;
+    if (index < 0 || index >= errorLogIds.length) return;
+    setErrorNavIndex(index);
+    handleNavigateToLog(errorLogIds[index]);
+  }, [errorLogIds, handleNavigateToLog]);
+
+  // 全局快捷键：Alt+S 堆栈原文切换；F2 / Shift+F2 错误行导航
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (logs.length === 0) return;
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === UiShortcutKey.StackRawToggle) {
+        if (stackEnabled) {
+          event.preventDefault();
+          setStackRawMode((prev) => !prev);
+        }
+        return;
+      }
+      if (event.key === 'F2' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (errorLogIds.length === 0) return;
+        event.preventDefault();
+        if (event.shiftKey) handlePrevError();
+        else handleNextError();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [logs.length, stackEnabled, errorLogIds.length, handleNextError, handlePrevError]);
 
   // 更新 partial filter
   const handleFilterChange = (updated: Partial<FilterOptions>) => {
     setFilter((prev) => ({ ...prev, ...updated }));
   };
 
-  const handleExportJSON = (rows: LogEntry[] = filteredLogs) => {
-    const blob = new Blob([jsonLogs(rows)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `log_export_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const rowsForScope = useCallback((scope: CopyScope): LogEntry[] => {
+    if (scope === CopyScope.Selected) return selectedLogs;
+    if (scope === CopyScope.Filtered) return filteredLogs;
+    return logs;
+  }, [selectedLogs, filteredLogs, logs]);
 
-  const handleExportCSV = (rows: LogEntry[] = filteredLogs) => {
-    const csvContent = csvLogs(rows, selectedFormat);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `log_export_${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const handleCopyScope = useCallback(async (scope: CopyScope, format: 'raw' | 'json'): Promise<number> => {
+    const rows = rowsForScope(scope);
+    if (!rows.length) return 0;
+    const text = format === 'json' ? jsonLogs(rows) : rows.map((item) => item.rawText).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      return rows.length;
+    } catch {
+      notifySearch('复制失败，请检查剪贴板权限');
+      return 0;
+    }
+  }, [rowsForScope, notifySearch]);
 
-  // 复制当前选中的多行日志原始文本
-  const handleCopySelected = useCallback(() => {
-    if (selectedIds.size === 0) return;
-    const selectedLogsList = filteredLogs.filter((l) => selectedIds.has(l.id));
-    const rawTextJoined = selectedLogsList.map((l) => l.rawText).join('\n');
-    navigator.clipboard.writeText(rawTextJoined);
-  }, [filteredLogs, selectedIds]);
+  const handleExportScope = useCallback((scope: CopyScope, format: 'json' | 'csv') => {
+    const rows = rowsForScope(scope);
+    if (!rows.length) return;
+    const content = format === 'json' ? jsonLogs(rows) : csvLogs(rows, selectedFormat);
+    const type = format === 'json' ? 'application/json' : 'text/csv;charset=utf-8;';
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `log_export_${Date.now()}.${format}`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [rowsForScope, selectedFormat]);
 
   // 全选过滤结果
   const handleSelectAll = useCallback(() => {
@@ -953,16 +1072,6 @@ export default function App() {
     setSelectedIds(new Set());
   }, []);
 
-  // 复制过滤后的原始日志
-  const handleCopyFilteredRaw = () => {
-    const rawTextLines = filteredLogs.map((l) => l.rawText).join('\n');
-    navigator.clipboard.writeText(rawTextLines);
-  };
-
-  const configuredFilterItems = useMemo(
-    () => selectedFormat.builtin ? [] : configuredFilterSummaries(selectedFormat, filter.configuredFilters),
-    [selectedFormat, filter.configuredFilters],
-  );
   const searchableFields = useMemo(
     () => selectedFormat.builtin ? undefined : selectedFormat.fields.map((field) => ({ key: field.id, label: field.label })),
     [selectedFormat],
@@ -1008,8 +1117,31 @@ export default function App() {
         formats={formats}
         selectedFormatId={selectedFormat.id}
         configErrors={configErrors}
-        stackEnabled={stackMode ?? selectedFormat.record.mode === RecordMode.Stack}
+        stackEnabled={stackEnabled}
+        stackRawMode={stackRawMode}
         sourceFiles={sourceFiles}
+        hasRemoteServers={sftpProfiles.some((item) => item.ready)}
+        isRemoteActive={historyLog?.kind === HistoryKind.Remote}
+        remoteTooltip={historyLog?.kind === HistoryKind.Remote ? `当前远程日志：${historyLog.origin}` : '浏览远程服务器日志'}
+        historyRevision={historyLog?.id}
+        aiOpen={aiOpen}
+        hasLogs={logs.length > 0}
+        density={density}
+        wordWrap={filter.wordWrap}
+        borderIntensity={borderIntensity}
+        columnVisibility={columnVisibility}
+        legacyBoldSelection={legacyBoldSelection}
+        legacyHighlightStyle={legacyHighlightStyle}
+        showLegacyViewOptions={Boolean(selectedFormat.builtin)}
+        onDensityChange={setDensity}
+        onWordWrapChange={(wordWrap) => handleFilterChange({ wordWrap })}
+        onBorderIntensityChange={setBorderIntensity}
+        onColumnVisibilityChange={setColumnVisibility}
+        onLegacyBoldSelectionChange={setLegacyBoldSelection}
+        onLegacyHighlightStyleChange={setLegacyHighlightStyle}
+        onResetColumnWidths={handleResetColumnWidths}
+        onOpenInvestigationViews={() => setInvestigationViewsOpen(true)}
+        onStackRawModeChange={setStackRawMode}
         onOpenLocal={handleSelectFile}
         onPickFile={() => { if (!isBusy) fileInputRef.current?.click(); }}
         onOpenRemote={() => openBrowseWindow()}
@@ -1020,7 +1152,7 @@ export default function App() {
         onStackChange={handleStackMode}
         onOpenAi={() => setAiOpen((value) => !value)}
         onOpenHistory={() => setHistoryOpen(true)}
-        aiOpen={aiOpen}
+        onOpenHistoryItem={(log) => void openHistory(log)}
       />
       <input ref={fileInputRef} type="file" className="hidden" aria-hidden="true" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; if (file) handleFile(file); event.target.value = ''; }} />
 
@@ -1041,11 +1173,12 @@ export default function App() {
         <DropZone
           isLoading={isBusy}
           servers={sftpProfiles}
+          remoteRevision={remoteRevision}
           onFileSelected={handleFile}
-          onOpenLocal={handleSelectFile}
           onOpenRemote={(profileId) => openBrowseWindow(profileId)}
-          onLoadSample={handleLoadSample}
+          onManageRemote={() => setManager({ focus: null })}
           onOpenHistory={(log) => void openHistory(log)}
+          onShowHistory={() => setHistoryOpen(true)}
         />
       ) : (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1053,106 +1186,114 @@ export default function App() {
           <Toolbar
             filter={filter}
             onFilterChange={handleFilterChange}
-            density={density}
-            onDensityChange={setDensity}
-            columnVisibility={columnVisibility}
-            onColumnVisibilityChange={setColumnVisibility}
             filteredCount={filteredLogs.length}
-            uniqueModules={uniqueModules}
-            uniqueThreads={uniqueThreads}
-            timeRange={timeRange}
+            totalCount={logs.length}
             selectedCount={selectedIds.size}
-            onCopySelected={handleCopySelected}
-            onSelectAll={handleSelectAll}
-            onClearSelection={handleClearSelection}
-            onExportJSON={handleExportJSON}
-            onExportCSV={handleExportCSV}
-            onCopyFilteredRaw={handleCopyFilteredRaw}
             totalMatches={searchMatchLogIds.length}
             currentMatchIndex={currentMatchIndex}
+            searchActive={searchActive}
             onTriggerSearch={handleTriggerSearch}
             onNextMatch={handleNextMatch}
             onPrevMatch={handlePrevMatch}
-            searchMode={investigationMode}
-            onSearchModeChange={setInvestigationMode}
-            navigation={<FloatingErrorNav filteredLogs={filteredLogs} selectedIds={selectedIds} onSelectLog={(id) => setSelectedIds(new Set([id]))} onNavigateToLog={handleNavigateToLog} theme={theme} />}
-            theme={theme}
-            borderIntensity={borderIntensity}
-            onBorderIntensityChange={setBorderIntensity}
-            onResetColumnWidths={handleResetColumnWidths}
-            onOpenInvestigationViews={() => setInvestigationViewsOpen(true)}
-            onJumpToLine={handleJumpToLine}
-            legacyBoldSelection={legacyBoldSelection}
-            onLegacyBoldSelectionChange={setLegacyBoldSelection}
-            legacyHighlightStyle={legacyHighlightStyle}
-            onLegacyHighlightStyleChange={setLegacyHighlightStyle}
-            showLegacyFilters={Boolean(selectedFormat.builtin)}
+            onJumpToMatch={handleJumpToMatchOrdinal}
+            onCopyScope={handleCopyScope}
+            onExportScope={handleExportScope}
             searchableFields={searchableFields}
-            configuredFilterItems={configuredFilterItems}
-            format={selectedFormat}
             logs={logs}
+            aiOpen={aiOpen}
+            onOpenAi={() => setAiOpen((value) => !value)}
           />
 
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
-              {selectedFormat.builtin ? <VirtualLogTable
-                onAnalyze={analyzeRows}
-                onOpenStack={openStack}
-                logs={filteredLogs}
-                format={selectedFormat}
-                density={density}
-                columnVisibility={columnVisibility}
-                selectedIds={selectedIds}
-                onSelectionChange={setSelectedIds}
-                highlightKeyword={filter.highlightKeyword}
-                highlightMatchCase={filter.highlightMatchCase}
-                highlightIsRegex={filter.highlightIsRegex}
-                matchCase={filter.matchCase}
-                wordWrap={filter.wordWrap}
-                filter={displayFilter}
-                onFilterChange={handleFilterChange}
-                uniqueModules={uniqueModules}
-                uniqueThreads={uniqueThreads}
-                timeRange={timeRange}
-                activeSearchLogId={activeSearchLogId}
-                searchKeyword={displayFilter.searchKeyword}
-                searchMatchCase={filter.matchCase}
-                searchIsRegex={filter.isRegex}
-                columnWidths={columnWidths}
-                onColumnWidthsChange={setColumnWidths}
-                theme={theme}
-                borderIntensity={borderIntensity}
-                jumpToLine={jumpToLine}
-                targetNavLog={targetNavLog}
-                onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
-                legacyBoldSelection={legacyBoldSelection}
-                legacyHighlightStyle={legacyHighlightStyle}
-              /> : <ConfigurableLogTable
-                onAnalyze={analyzeRows}
-                onOpenStack={openStack}
-                logs={filteredLogs}
-                optionLogs={logs}
-                format={selectedFormat}
-                filters={filter.configuredFilters}
-                onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
-                filter={displayFilter}
-                density={density}
-                theme={theme}
-                selectedIds={selectedIds}
-                onSelectionChange={setSelectedIds}
-                activeSearchLogId={activeSearchLogId}
-                columnWidths={configuredColumnWidths[selectedFormat.id] || {}}
-                onColumnWidthsChange={(widths) => setConfiguredColumnWidths((current) => ({ ...current, [selectedFormat.id]: widths }))}
-                jumpToLine={jumpToLine}
-                targetNavLog={targetNavLog}
-                onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
-              />}
-              <SelectionActionBar selectedLogs={selectedLogs} filteredLogs={filteredLogs} format={selectedFormat} theme={theme} onCopyRaw={handleCopySelected} onExportCSV={handleExportCSV} onExportJSON={handleExportJSON} onAnalyze={analyzeRows} onSelectAll={handleSelectAll} onClear={handleClearSelection} />
+              <div ref={tableAreaRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                {/* 内置格式保持原表格；外部格式使用契约驱动表格 */}
+                {selectedFormat.builtin ? <VirtualLogTable
+                  onAnalyze={analyzeRows}
+                  logs={filteredLogs}
+                  format={selectedFormat}
+                  density={density}
+                  columnVisibility={columnVisibility}
+                  selectedIds={selectedIds}
+                  onSelectionChange={setSelectedIds}
+                  highlightKeyword={filter.highlightKeyword}
+                  highlightMatchCase={filter.highlightMatchCase}
+                  highlightIsRegex={filter.highlightIsRegex}
+                  matchCase={filter.matchCase}
+                  wordWrap={filter.wordWrap}
+                  filter={filter}
+                  onFilterChange={handleFilterChange}
+                  uniqueModules={uniqueModules}
+                  uniqueThreads={uniqueThreads}
+                  timeRange={timeRange}
+                  activeSearchLogId={activeSearchLogId}
+                  searchKeyword={filter.searchKeyword}
+                  searchMatchCase={filter.matchCase}
+                  searchIsRegex={filter.isRegex}
+                  columnWidths={columnWidths}
+                  onColumnWidthsChange={setColumnWidths}
+                  theme={theme}
+                  borderIntensity={borderIntensity}
+                  jumpToLine={jumpToLine}
+                  targetNavLog={targetNavLog}
+                  onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+                  legacyBoldSelection={legacyBoldSelection}
+                  legacyHighlightStyle={legacyHighlightStyle}
+                  stackEnabled={stackEnabled}
+                  stackRawMode={stackRawMode}
+                  repository={historyLog?.repository}
+                /> : <ConfigurableLogTable
+                  onAnalyze={analyzeRows}
+                  logs={filteredLogs}
+                  optionLogs={logs}
+                  format={selectedFormat}
+                  filters={filter.configuredFilters}
+                  onFiltersChange={(configuredFilters) => handleFilterChange({ configuredFilters })}
+                  filter={filter}
+                  density={density}
+                  theme={theme}
+                  selectedIds={selectedIds}
+                  onSelectionChange={setSelectedIds}
+                  activeSearchLogId={activeSearchLogId}
+                  columnWidths={configuredColumnWidths[selectedFormat.id] || {}}
+                  onColumnWidthsChange={(widths) => setConfiguredColumnWidths((current) => ({ ...current, [selectedFormat.id]: widths }))}
+                  jumpToLine={jumpToLine}
+                  targetNavLog={targetNavLog}
+                  onFirstVisibleIndexChange={handleFirstVisibleIndexChange}
+                  stackEnabled={stackEnabled}
+                  stackRawMode={stackRawMode}
+                  repository={historyLog?.repository}
+                  onRangeKeywordChange={(rangeKeyword) => handleFilterChange({ rangeKeyword })}
+                />}
+                <FloatingErrorNav
+                  totalErrors={errorLogIds.length}
+                  currentErrorIndex={errorNavIndex}
+                  onPrevError={handlePrevError}
+                  onNextError={handleNextError}
+                  onJumpToError={handleJumpToErrorOrdinal}
+                  containerRef={tableAreaRef}
+                />
+              </div>
+              <SelectionActionBar
+                selectedCount={selectedIds.size}
+                filteredCount={filteredLogs.length}
+                totalCount={logs.length}
+                onSelectAll={handleSelectAll}
+                onClearSelection={handleClearSelection}
+              />
             </div>
-            {inspectedLog ? <LogInspector log={inspectedLog} format={selectedFormat} filter={filter} theme={theme} sourceOverrides={sourceNav.columns} onClose={closeInspector} /> : null}
           </div>
         </div>
+      )}
+      {searchNotice && typeof document !== 'undefined' && createPortal(
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-11 left-1/2 -translate-x-1/2 z-[380] pointer-events-none px-3 py-1.5 rounded-[var(--radius-ctl)] bg-slate-900/92 dark:bg-slate-800/95 text-white border border-white/10 shadow-[var(--shadow-window)] text-xs font-medium"
+        >
+          {searchNotice}
+        </div>,
+        document.body
       )}
         </div>
         <AiWorkspace theme={theme} log={historyLog} logs={logs} content={source?.content || ''} request={aiRequest} sourceTargets={sourceTargets} sourceRevision={sourceNav.revision} open={aiOpen} historyOpen={historyOpen} onOpenChange={setAiOpen} onHistoryOpenChange={setHistoryOpen} onRepository={bindRepository} onOpenHistory={(log) => void openHistory(log)} onLocalPath={() => setLocalPathOpen(true)} onJump={handleJumpToLine} getView={aiView} />

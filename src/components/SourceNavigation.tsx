@@ -3,9 +3,15 @@ import { createPortal } from 'react-dom';
 import { ExternalLink, FolderSearch, X } from 'lucide-react';
 import { LogFormatConfig } from '../config/logFormatTypes';
 import { SourceColumns, SourceConst, SourceMatch, SourceOpener, SourceTarget } from '../config/sourceTypes';
+import { UiStorageKey } from '../config/uiConstants';
 import { SourceApi } from '../services/sourceApi';
 import { shortPaths, sourceColumns, sourceTarget } from '../utils/sourceUtils';
 import { LogEntry } from '../types';
+
+export interface StackPrefixRule {
+  app: string[];
+  lib: string[];
+}
 
 interface Choice { target: SourceTarget; matches: SourceMatch[]; x: number; y: number; light: boolean }
 interface SourceContextValue {
@@ -13,6 +19,9 @@ interface SourceContextValue {
   refresh: () => void;
   columns: Record<string, SourceColumns>;
   setColumns: (id: string, columns: SourceColumns) => void;
+  roots: string[];
+  prefixes: Record<string, StackPrefixRule>;
+  setPrefixes: (id: string, rule: StackPrefixRule) => void;
   choose: (choice: Choice) => void;
   notify: (message: string) => void;
   openers: SourceOpener[];
@@ -23,6 +32,18 @@ const SourceContext = createContext<SourceContextValue>(null!);
 
 export function useSource() { return useContext(SourceContext); }
 
+function loadPrefixMap(key: UiStorageKey): Record<string, string[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || '{}');
+    if (!raw || Array.isArray(raw) || typeof raw !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []]),
+    );
+  } catch {
+    return {};
+  }
+}
+
 export function SourceProvider({ children }: { children: React.ReactNode }) {
   const [revision, setRevision] = useState(0);
   const [columns, setColumns] = useState<Record<string, SourceColumns>>(() => {
@@ -32,6 +53,17 @@ export function SourceProvider({ children }: { children: React.ReactNode }) {
       return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof (item as SourceColumns).file === 'string' && typeof (item as SourceColumns).line === 'string'));
     } catch { return {}; }
   });
+  const [prefixes, setPrefixesState] = useState<Record<string, StackPrefixRule>>(() => {
+    const appMap = loadPrefixMap(UiStorageKey.SourceAppPrefixes);
+    const libMap = loadPrefixMap(UiStorageKey.SourceLibPrefixes);
+    const ids = new Set([...Object.keys(appMap), ...Object.keys(libMap)]);
+    const merged: Record<string, StackPrefixRule> = {};
+    ids.forEach((id) => {
+      merged[id] = { app: appMap[id] || [], lib: libMap[id] || [] };
+    });
+    return merged;
+  });
+  const [roots, setRoots] = useState<string[]>([]);
   const [choice, setChoice] = useState<Choice | null>(null);
   const [message, setMessage] = useState('');
   const [openers, setOpeners] = useState<SourceOpener[]>([]);
@@ -51,6 +83,7 @@ export function SourceProvider({ children }: { children: React.ReactNode }) {
     SourceApi.state().then((data) => {
       if (cancelled) return;
       setOpeners(data.openers);
+      setRoots(data.roots || []);
       setOverrideId((current) => {
         if (current && data.openers.some((item) => item.id === current)) return current;
         try { sessionStorage.removeItem(SourceConst.OverrideKey); } catch { /* ignore */ }
@@ -59,11 +92,24 @@ export function SourceProvider({ children }: { children: React.ReactNode }) {
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [revision]);
-  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), openers, overrideId, setOverrideId: setOverride, columns, setColumns: (id, value) => {
+  const savePrefixes = (id: string, rule: StackPrefixRule) => {
+    const next: Record<string, StackPrefixRule> = { ...prefixes, [id]: rule };
+    setPrefixesState(next);
+    try {
+      const entries = Object.entries(next) as Array<[string, StackPrefixRule]>;
+      const appMap = Object.fromEntries(entries.map(([k, v]) => [k, v.app]));
+      const libMap = Object.fromEntries(entries.map(([k, v]) => [k, v.lib]));
+      localStorage.setItem(UiStorageKey.SourceAppPrefixes, JSON.stringify(appMap));
+      localStorage.setItem(UiStorageKey.SourceLibPrefixes, JSON.stringify(libMap));
+    } catch {
+      setMessage('前缀设置仅在本次会话有效：浏览器存储不可用');
+    }
+  };
+  return <SourceContext.Provider value={{ revision, refresh: () => setRevision((n) => n + 1), openers, overrideId, setOverrideId: setOverride, roots, prefixes, setPrefixes: savePrefixes, columns, setColumns: (id, value) => {
     const next = { ...columns, [id]: value };
     setColumns(next);
     try { localStorage.setItem(SourceConst.ColumnsKey, JSON.stringify(next)); } catch { setMessage('列设置仅在本次会话有效：浏览器存储不可用'); }
-  }, choose: setChoice, notify: setMessage }}>{children}{choice ? <SourceChoices choice={choice} onClose={() => setChoice(null)} notify={setMessage} /> : null}{message ? createPortal(<div role="status" className="fixed bottom-5 left-1/2 z-[120] max-w-[90vw] -translate-x-1/2 rounded-lg bg-slate-800 px-4 py-3 text-sm text-white shadow-lg">{message}</div>, document.body) : null}</SourceContext.Provider>;
+  }, choose: setChoice, notify: setMessage }}>{children}{choice ? <SourceChoices choice={choice} onClose={() => setChoice(null)} notify={setMessage} /> : null}{message ? createPortal(<div role="status" className="fixed bottom-11 left-1/2 z-[380] max-w-[90vw] -translate-x-1/2 rounded-lg bg-slate-800 px-4 py-2.5 text-xs text-white shadow-lg">{message}</div>, document.body) : null}</SourceContext.Provider>;
 }
 
 export function SourceMenuItem({ log, format, field, light, onClose }: { log: LogEntry; format: LogFormatConfig; field: string; light: boolean; onClose: () => void }) {
