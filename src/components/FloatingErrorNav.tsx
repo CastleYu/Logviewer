@@ -164,7 +164,7 @@ export const FloatingErrorNav: React.FC<FloatingErrorNavProps> = ({
 
   const commitJumpInput = () => {
     const parsed = OrdinalJump.parse(draft, totalErrors);
-    if (!parsed.ok) {
+    if (parsed.ok === false) {
       setJumpError(parsed.error);
       inputRef.current?.focus();
       return;

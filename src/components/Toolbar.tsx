@@ -262,7 +262,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
   const commitJumpInput = () => {
     const parsed = OrdinalJump.parse(jumpDraft, totalMatches);
-    if (!parsed.ok) {
+    if (parsed.ok === false) {
       setJumpError(parsed.error);
       jumpInputRef.current?.focus();
       return;
